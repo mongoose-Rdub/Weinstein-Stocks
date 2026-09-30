@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weinstein Stage 2 Dashboard</title><style>
+:root{color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:#f3f5f9;color:#1c2333;font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:0 0 40px}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:26px 32px 18px;background:linear-gradient(135deg,#0f2a4a,#1d4f7a);color:#fff}
+header h1{margin:0;font-size:26px;letter-spacing:.3px}header p{margin:4px 0 0;opacity:.8}
+.meta{text-align:right;font-size:13px;opacity:.9}
+.mkt{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 32px;font-size:13px;color:#fff}
+.m1{background:#6b7a90}.m2{background:#1f9d55}.m3{background:#d9822b}.m4{background:#c0392b}
+.mkt span{opacity:.92}
+.groups{padding:12px 32px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.groups small{color:#6b7689;font-weight:600;letter-spacing:.8px;margin-right:4px}
+.gc{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.gc i{font-style:normal;opacity:.7;margin-left:3px}
+.gc.on{background:#dff3e6;color:#17683a}.gc.off{background:#e8eaef;color:#7a8396;text-decoration:line-through}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;padding:16px 32px 6px}
+.tile{background:#fff;border-radius:10px;padding:12px 14px;border-left:5px solid #999;box-shadow:0 1px 3px rgba(20,30,60,.08)}
+.tile b{display:block;font-size:26px;line-height:1.1}.tile span{font-size:12px;color:#5d6778}
+.ta{border-color:#1f9d55}.ta b{color:#1f9d55}.tn{border-color:#e6a100}.tn b{color:#b97f00}
+.tw{border-color:#2f7fd6}.tw b{color:#2f7fd6}.tp{border-color:#8a5bd0}.tp b{color:#8a5bd0}
+.ts{border-color:#d9582b}.ts b{color:#d9582b}.td{border-color:#8b94a6}.td b{color:#6b7689}
+/* hero */
+.hero{max-width:1040px;margin:22px auto 10px;background:#fff;border-radius:18px;border:3px solid #1f9d55;
+ box-shadow:0 0 0 6px rgba(31,157,85,.12),0 12px 34px rgba(31,157,85,.18);overflow:hidden}
+.hero-head{background:linear-gradient(90deg,#157a41,#23b068);color:#fff;text-align:center;font-size:22px;font-weight:800;
+ letter-spacing:3px;padding:14px;display:flex;justify-content:center;align-items:center;gap:12px}
+.hero-head .dot{width:12px;height:12px;border-radius:50%;background:#b8ffd3;box-shadow:0 0 0 4px rgba(255,255,255,.25)}
+.count{display:inline-block;margin-left:10px;background:rgba(0,0,0,.14);border-radius:999px;padding:1px 12px;font-size:15px;letter-spacing:0;vertical-align:middle}
+.abuys{display:flex;flex-wrap:wrap;gap:16px;justify-content:center;padding:22px}
+.abuy{flex:1 1 300px;max-width:460px;border:2px solid #bfe6cd;background:#f4fbf7;border-radius:14px;padding:16px}
+.abuy-top{display:flex;justify-content:space-between;align-items:center}
+.tk{font-size:30px;font-weight:800;color:#0f5e32}.tag{background:#1f9d55;color:#fff;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;letter-spacing:.8px}
+.abuy-sub{color:#5d6778;font-size:12px;margin:2px 0 12px}
+.levels{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.lv{border-radius:10px;padding:10px 12px;text-align:center}
+.lv small{display:block;font-weight:700;letter-spacing:1px;font-size:11px}.lv b{font-size:26px;display:block;line-height:1.15}.lv em{font-style:normal;font-size:12px}
+.lv.entry{background:#dff3e6;color:#0f5e32}.lv.stop{background:#fde4e1;color:#a52a1d}
+.how{margin:10px 0 0;font-size:13px}.size{margin:10px 0 0;font-size:12px;color:#5d6778;border-top:1px dashed #bfe6cd;padding-top:8px}
+.none{text-align:center;padding:34px 24px}.none h3{margin:0 0 6px;font-size:20px;color:#157a41}.none p{margin:0;color:#5d6778}
+.none.stop4 h3{color:#c0392b}
+.hero-foot{text-align:center;font-size:12px;color:#5d6778;background:#eef8f2;padding:10px 16px;border-top:1px solid #d3eadc}
+/* panels */
+main{max-width:1240px;margin:18px auto;padding:0 20px;display:grid;gap:18px}
+.panel{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(20,30,60,.08);overflow:hidden;border-top:5px solid #999}
+.ph{padding:14px 18px 8px}.ph h2{margin:0;font-size:17px}.ph p{margin:3px 0 0;color:#5d6778;font-size:13px}
+.ph .count{background:#e9ecf2;color:#444;font-size:13px}
+.near{border-color:#e6a100}.watch{border-color:#2f7fd6}.wait{border-color:#8a5bd0}.skip{border-color:#d9582b}.disc{border-color:#8b94a6}.susp{border-color:#5b6b85}
+.near .ph h2{color:#a87100}.watch .ph h2{color:#2469b4}.wait .ph h2{color:#7547b8}.skip .ph h2{color:#c2471f}.disc .ph h2{color:#5f6878}.susp .ph h2{color:#46546b}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}th{text-align:left;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#6b7689;padding:8px 14px;background:#f7f8fb;white-space:nowrap}
+td{padding:9px 14px;border-top:1px solid #edf0f5;white-space:nowrap}tr:hover td{background:#fafbfd}
+.t{font-size:15px;margin-right:8px}.g{font-size:11px;color:#8a93a5}
+small{color:#8a93a5}.bad{color:#c0392b}
+.chip{padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.chip.light{background:#fff3d6;color:#8a6100}.chip.heavy{background:#fde4e1;color:#a52a1d}.chip.ok{background:#dff3e6;color:#17683a}
+.empty{padding:16px 18px;color:#8a93a5}.note{padding:8px 18px 12px;font-size:12px;color:#7a8396}
+footer{max-width:1040px;margin:26px auto 0;padding:0 24px;color:#5d6778;font-size:12.5px}
+footer h3{margin:0 0 6px;font-size:14px;color:#1c2333}.disc{font-size:11.5px;color:#8a93a5}
+@media(max-width:640px){header,.mkt,.groups,.tiles{padding-left:16px;padding-right:16px}.levels{grid-template-columns:1fr}}
+</style></head><body>
+<header>
+  <div><h1>Stage 2 Buy Dashboard</h1>
+    <p>Stan Weinstein method · weekly charts · 469 stocks screened in favorable groups</p></div>
+  <div class="meta"><div>Week ending <b>2026-09-25</b></div><div>Updated Sep 30, 2026 07:53 PM</div></div>
+</header>
+<div class="mkt m2"><b>S&amp;P 500: Stage 2 – advancing</b>
+  <span>Market trend permits buying.</span></div>
+<div class="groups"><small>SECTORS</small><span class='gc off'>Cons Disc <i>S4</i></span><span class='gc on'>Energy <i>S2</i></span><span class='gc off'>Finance <i>S3</i></span><span class='gc on'>Health <i>S2</i></span><span class='gc off'>Industrial <i>S4</i></span><span class='gc off'>Materials <i>S4</i></span><span class='gc off'>Real Estate <i>S4</i></span><span class='gc off'>Staples <i>S4</i></span><span class='gc on'>Tech <i>S2</i></span><span class='gc on'>Telecom <i>S1</i></span><span class='gc off'>Utility <i>S4</i></span></div>
+<div class="tiles"><div class='tile ta'><b>0</b><span>Active buys</span></div><div class='tile tn'><b>11</b><span>Near misses</span></div><div class='tile tw'><b>0</b><span>Buy-stop watch</span></div><div class='tile tp'><b>0</b><span>Wait for pullback</span></div><div class='tile ts'><b>9</b><span>Skip: stop too wide</span></div><div class='tile td'><b>12</b><span>Discarded: resistance</span></div></div>
+
+  <section class="hero">
+    <div class="hero-head"><span class="dot"></span>ACTIVE BUYS
+      <span class="count">0</span></div>
+    <div class='none'><h3>No active buys this week</h3><p>Nothing meets every rule. Patience is a position. Check the near misses below.</p></div>
+    <div class="hero-foot">Stop within 15% of entry ·
+      breakout volume ≥ 2x · no heavy resistance within
+      20% · group and market not in decline</div>
+  </section>
+
+<main>
+  <section class="panel near">
+    <div class="ph"><h2>Near Misses<span class="count">11</span></h2><p>In the pullback zone with a stop inside the limit, but volume has not contracted enough. Watch for volume to dry up.</p></div>
+    <div class='scroll'><table><thead><tr><th>Ticker</th><th>Price</th><th>Stage 2 wks</th><th>Volume vs peak</th><th>Pullback zone</th><th>Stop</th><th>Risk</th><th>RS</th><th>Resistance</th></tr></thead><tbody><tr><td class=''><b class='t'>UFPT</b><span class='g'>Health</span></td><td class=''>$295.65</td><td class=''>8</td><td class=''>0.39 <small>(needs ≤ 0.25)</small></td><td class=''>$271.11 – $301.85</td><td class=''>$255.82</td><td class=''>-13.5%</td><td class=''>15.6</td><td class=''><span class='chip light'>light +14.6% 7w</span></td></tr><tr><td class=''><b class='t'>THC</b><span class='g'>Health</span></td><td class=''>$259.71</td><td class=''>9</td><td class=''>0.44 <small>(needs ≤ 0.25)</small></td><td class=''>$239.79 – $266.99</td><td class=''>$228.33</td><td class=''>-12.1%</td><td class=''>13.3</td><td class=''><span class='chip light'>light +9.0% 4w</span></td></tr><tr><td class=''><b class='t'>HRMY</b><span class='g'>Health</span></td><td class=''>$41.26</td><td class=''>4</td><td class=''>0.48 <small>(needs ≤ 0.25)</small></td><td class=''>$39.64 – $44.14</td><td class=''>$36.30</td><td class=''>-12.0%</td><td class=''>11.9</td><td class=''><span class='chip light'>light +5.4% 3w</span></td></tr><tr><td class=''><b class='t'>VRTX</b><span class='g'>Health</span></td><td class=''>$526.19</td><td class=''>13</td><td class=''>0.54 <small>(needs ≤ 0.25)</small></td><td class=''>$504.09 – $561.25</td><td class=''>$490.82</td><td class=''>-6.7%</td><td class=''>4.5</td><td class=''><span class='chip light'>light +1.4% 11w</span></td></tr><tr><td class=''><b class='t'>WHD</b><span class='g'>Energy</span></td><td class=''>$64.30</td><td class=''>9</td><td class=''>0.61 <small>(needs ≤ 0.25)</small></td><td class=''>$62.09 – $69.13</td><td class=''>$61.34</td><td class=''>-4.6%</td><td class=''>11.9</td><td class=''><span class='chip light'>light +14.9% 5w</span></td></tr><tr><td class=''><b class='t'>MTCH</b><span class='g'>Telecom</span></td><td class=''>$40.55</td><td class=''>22</td><td class=''>0.67 <small>(needs ≤ 0.25)</small></td><td class=''>$37.16 – $41.37</td><td class=''>$35.88</td><td class=''>-11.5%</td><td class=''>8.1</td><td class=''><span class='chip light'>light +10.8% 1w</span></td></tr><tr><td class=''><b class='t'>ZD</b><span class='g'>Telecom</span></td><td class=''>$56.51</td><td class=''>13</td><td class=''>0.67 <small>(needs ≤ 0.25)</small></td><td class=''>$54.79 – $61.00</td><td class=''>$50.28</td><td class=''>-11.0%</td><td class=''>22.3</td><td class=''><span class='chip light'>light +2.7% 7w</span></td></tr><tr><td class=''><b class='t'>HPQ</b><span class='g'>Tech</span></td><td class=''>$31.30</td><td class=''>8</td><td class=''>0.68 <small>(needs ≤ 0.25)</small></td><td class=''>$28.14 – $31.33</td><td class=''>$26.88</td><td class=''>-14.1%</td><td class=''>22.6</td><td class=''><span class='chip light'>light +3.9% 82w</span></td></tr><tr><td class=''><b class='t'>WST</b><span class='g'>Health</span></td><td class=''>$370.44</td><td class=''>21</td><td class=''>0.68 <small>(needs ≤ 0.25)</small></td><td class=''>$336.55 – $374.72</td><td class=''>$324.93</td><td class=''>-12.3%</td><td class=''>16.0</td><td class=''><span class='chip light'>light +4.1% 9w</span></td></tr><tr><td class=''><b class='t'>BDX</b><span class='g'>Health</span></td><td class=''>$183.82</td><td class=''>6</td><td class=''>0.71 <small>(needs ≤ 0.25)</small></td><td class=''>$178.70 – $198.97</td><td class=''>$165.96</td><td class=''>-9.7%</td><td class=''>7.3</td><td class=''><span class='chip light'>light +3.5% 85w</span></td></tr><tr><td class=''><b class='t'>AMGN</b><span class='g'>Health</span></td><td class=''>$414.61</td><td class=''>8</td><td class=''>0.82 <small>(needs ≤ 0.25)</small></td><td class=''>$383.82 – $427.35</td><td class=''>$374.33</td><td class=''>-9.7%</td><td class=''>9.2</td><td class=''><span class='chip light'>light +7.8% 4w</span></td></tr></tbody></table></div><div class="note">Book example: pullback volume contracted over 75% from peak (p.105). The threshold is tunable.</div>
+  </section>
+  <section class="panel watch">
+    <div class="ph"><h2>Buy-Stop Watchlist<span class="count">0</span></h2><p>Coiled in a base with an acceptable stop. Place a buy-stop above the top; it is not a buy until it triggers on volume.</p></div>
+    <div class='empty'>None this week</div>
+  </section>
+  <section class="panel wait">
+    <div class="ph"><h2>Wait for Pullback<span class="count">0</span></h2><p>Good breakout, more than 10% above entry. Don't chase (p.139).</p></div>
+    <div class='empty'>None this week</div>
+  </section>
+  <section class="panel skip">
+    <div class="ph"><h2>Skip – Stop Too Wide<span class="count">9</span></h2><p>Good setup, but the stop is more than 15% away (p.184). Occasional exceptions only for outstanding charts.</p></div>
+    <div class='scroll'><table><thead><tr><th>Ticker</th><th>Setup</th><th>Price</th><th>Entry</th><th>Stop</th><th>Risk</th><th>RS</th><th>Resistance</th></tr></thead><tbody><tr><td class=''><b class='t'>WBD</b><span class='g'>Telecom</span></td><td class=''>Continuation - Buy</td><td class=''>$30.86</td><td class=''>$30.00</td><td class=''>$24.88</td><td class=''><b class='bad'>-19.4%</b></td><td class=''>7.0</td><td class=''><span class='chip ok'>clear</span></td></tr><tr><td class=''><b class='t'>GILD</b><span class='g'>Health</span></td><td class=''>Buy-Stop Watch</td><td class=''>$150.93</td><td class=''>$154.51</td><td class=''>$119.80</td><td class=''><b class='bad'>-22.5%</b></td><td class=''>5.4</td><td class=''><span class='chip ok'>clear</span></td></tr><tr><td class=''><b class='t'>XOM</b><span class='g'>Energy</span></td><td class=''>Buy-Stop Watch</td><td class=''>$160.59</td><td class=''>$174.44</td><td class=''>$133.96</td><td class=''><b class='bad'>-23.2%</b></td><td class=''>5.7</td><td class=''><span class='chip ok'>clear</span></td></tr><tr><td class=''><b class='t'>MSI</b><span class='g'>Tech</span></td><td class=''>Buy-Stop Watch</td><td class=''>$456.88</td><td class=''>$494.56</td><td class=''>$378.88</td><td class=''><b class='bad'>-23.4%</b></td><td class=''>-0.7</td><td class=''><span class='chip ok'>old</span></td></tr><tr><td class=''><b class='t'>DVN</b><span class='g'>Energy</span></td><td class=''>Buy-Stop Watch</td><td class=''>$47.05</td><td class=''>$52.10</td><td class=''>$39.38</td><td class=''><b class='bad'>-24.4%</b></td><td class=''>3.4</td><td class=''><span class='chip ok'>old</span></td></tr><tr><td class=''><b class='t'>TEL</b><span class='g'>Tech</span></td><td class=''>Buy-Stop Watch</td><td class=''>$218.59</td><td class=''>$251.11</td><td class=''>$189.41</td><td class=''><b class='bad'>-24.6%</b></td><td class=''>-7.6</td><td class=''><span class='chip ok'>clear</span></td></tr><tr><td class=''><b class='t'>MDT</b><span class='g'>Health</span></td><td class=''>Buy-Stop Watch</td><td class=''>$88.64</td><td class=''>$96.50</td><td class=''>$71.94</td><td class=''><b class='bad'>-25.5%</b></td><td class=''>-8.6</td><td class=''><span class='chip light'>light +6.6% 33w</span></td></tr><tr><td class=''><b class='t'>HSIC</b><span class='g'>Health</span></td><td class=''>Buy-Stop Watch</td><td class=''>$86.37</td><td class=''>$92.36</td><td class=''>$68.38</td><td class=''><b class='bad'>-26.0%</b></td><td class=''>1.9</td><td class=''><span class='chip ok'>clear</span></td></tr><tr><td class=''><b class='t'>MCK</b><span class='g'>Health</span></td><td class=''>Buy-Stop Watch</td><td class=''>$866.64</td><td class=''>$998.83</td><td class=''>$721.99</td><td class=''><b class='bad'>-27.7%</b></td><td class=''>-5.3</td><td class=''><span class='chip ok'>clear</span></td></tr></tbody></table></div>
+  </section>
+  <section class="panel disc">
+    <div class="ph"><h2>Discarded – Overhead Resistance<span class="count">12</span></h2><p>Would otherwise qualify, but supply sits within 20% overhead (p.115, p.139). Re-check if price clears the level.</p></div>
+    <div class='scroll'><table><thead><tr><th>Ticker</th><th>Would have been</th><th>Price</th><th>Resistance</th><th>Age</th><th>Weeks over</th><th>Risk</th></tr></thead><tbody><tr><td class=''><b class='t'>DIS</b><span class='g'>Telecom</span></td><td class=''>Buy-Stop Watch</td><td class=''>$106.15</td><td class=''>$113.42 <small>(+1.2%)</small></td><td class=''>81w</td><td class=''>16</td><td class=''>-17.3%</td></tr><tr><td class=''><b class='t'>ELV</b><span class='g'>Health</span></td><td class=''>Near Miss</td><td class=''>$396.09</td><td class=''>$401.72 <small>(+1.4%)</small></td><td class=''>86w</td><td class=''>15</td><td class=''>-2.5%</td></tr><tr><td class=''><b class='t'>PLUS</b><span class='g'>Tech</span></td><td class=''>Near Miss</td><td class=''>$90.51</td><td class=''>$92.08 <small>(+1.7%)</small></td><td class=''>19w</td><td class=''>3</td><td class=''>-6.3%</td></tr><tr><td class=''><b class='t'>NOW</b><span class='g'>Tech</span></td><td class=''>Near Miss</td><td class=''>$135.62</td><td class=''>$139.20 <small>(+2.6%)</small></td><td class=''>16w</td><td class=''>10</td><td class=''>-14.0%</td></tr><tr><td class=''><b class='t'>EHC</b><span class='g'>Health</span></td><td class=''>Near Miss</td><td class=''>$123.47</td><td class=''>$126.95 <small>(+2.8%)</small></td><td class=''>52w</td><td class=''>4</td><td class=''>-11.8%</td></tr><tr><td class=''><b class='t'>MD</b><span class='g'>Health</span></td><td class=''>Near Miss</td><td class=''>$26.31</td><td class=''>$27.33 <small>(+3.9%)</small></td><td class=''>7w</td><td class=''>5</td><td class=''>-4.4%</td></tr><tr><td class=''><b class='t'>NWS</b><span class='g'>Telecom</span></td><td class=''>Near Miss</td><td class=''>$31.75</td><td class=''>$33.05 <small>(+4.1%)</small></td><td class=''>72w</td><td class=''>32</td><td class=''>-1.4%</td></tr><tr><td class=''><b class='t'>NWSA</b><span class='g'>Telecom</span></td><td class=''>Near Miss</td><td class=''>$28.49</td><td class=''>$30.24 <small>(+6.2%)</small></td><td class=''>83w</td><td class=''>25</td><td class=''>-2.8%</td></tr><tr><td class=''><b class='t'>CHE</b><span class='g'>Health</span></td><td class=''>Near Miss</td><td class=''>$512.16</td><td class=''>$556.27 <small>(+8.6%)</small></td><td class=''>6w</td><td class=''>37</td><td class=''>-4.8%</td></tr><tr><td class=''><b class='t'>MANH</b><span class='g'>Tech</span></td><td class=''>Near Miss</td><td class=''>$206.03</td><td class=''>$227.03 <small>(+10.2%)</small></td><td class=''>4w</td><td class=''>14</td><td class=''>-14.9%</td></tr><tr><td class=''><b class='t'>ITGR</b><span class='g'>Health</span></td><td class=''>Pullback - Buy</td><td class=''>$126.34</td><td class=''>$127.56 <small>(+1.0%)</small></td><td class=''>73w</td><td class=''>12</td><td class=''>-22.3%</td></tr><tr><td class=''><b class='t'>RAMP</b><span class='g'>Tech</span></td><td class=''>Pullback - Buy</td><td class=''>$37.50</td><td class=''>$37.92 <small>(+1.1%)</small></td><td class=''>15w</td><td class=''>10</td><td class=''>-40.3%</td></tr></tbody></table></div>
+  </section>
+  <section class="panel susp">
+    <div class="ph"><h2>Suspect Breakouts<span class="count">4</span></h2><p>New Stage 2 without the required volume surge. If owned, sell on the first rally (p.116).</p></div>
+    <div class='scroll'><table><thead><tr><th>Ticker</th><th>Price</th><th>Stage 2 wks</th><th>Volume</th><th>RS</th></tr></thead><tbody><tr><td class=''><b class='t'>META</b><span class='g'>Telecom</span></td><td class=''>$751.66</td><td class=''>1</td><td class=''>1.9x <small>(needs ≥ 2x)</small></td><td class=''>9.0</td></tr><tr><td class=''><b class='t'>MTD</b><span class='g'>Health</span></td><td class=''>$1,511.64</td><td class=''>1</td><td class=''>1.2x <small>(needs ≥ 2x)</small></td><td class=''>4.2</td></tr><tr><td class=''><b class='t'>SMTC</b><span class='g'>Tech</span></td><td class=''>$182.30</td><td class=''>2</td><td class=''>0.9x <small>(needs ≥ 2x)</small></td><td class=''>60.1</td></tr><tr><td class=''><b class='t'>TMO</b><span class='g'>Health</span></td><td class=''>$675.00</td><td class=''>2</td><td class=''>1.1x <small>(needs ≥ 2x)</small></td><td class=''>13.9</td></tr></tbody></table></div>
+  </section></main>
+<footer>
+  <h3>How to read this</h3>
+  <p><b>Active buy</b> = Stage 2 breakout on ≥2x volume (or continuation/pullback buy), market and sector not in decline,
+  no heavy overhead resistance, stop within 15% of entry. <b>Entry</b> is the breakout level; do not chase more than
+  10% above. <b>Stop</b> sits one-eighth below the base floor (or below the pullback low),
+  placed as a sell-stop. Size positions equally, about 1/15 of the account each.</p>
+  <p class="disc">For education only. This is not investment advice and not a recommendation to buy or sell any security.
+  Signals are mechanical and can be wrong; verify on the chart and size risk yourself. Data: Yahoo Finance, Friday weekly closes.
+  Rules follow <i>Secrets for Profiting in Bull and Bear Markets</i>; thresholds the book does not specify are the author's choices.</p>
+</footer></body></html>
