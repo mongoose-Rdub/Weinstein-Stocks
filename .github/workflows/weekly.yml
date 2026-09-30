@@ -1,0 +1,53 @@
+name: Weekly Weinstein screen
+
+on:
+  schedule:
+    # Fridays 21:30 UTC = 3:30pm CST / 4:30pm CDT (both after the 3pm CT close)
+    - cron: "30 21 * * 5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weinstein
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit tests
+        run: python test_pure.py
+      - name: Run screener (yfinance can throttle; script pauses and retries)
+        run: python weinstein_pure.py --universe sp1500 --rounds 8 --feed weinstein_feed.json
+      - name: Build dashboard
+        run: |
+          mkdir -p docs
+          python build_dashboard.py weinstein_feed.json docs/index.html
+          cp weinstein_feed.json docs/weinstein_feed.json
+      - name: Sanity check the data is this week's
+        run: |
+          python - <<'PY'
+          import json, datetime as d
+          f = json.load(open("weinstein_feed.json"))
+          last = d.date.fromisoformat(f["last_bar"])
+          age = (d.date.today() - last).days
+          print("last bar", last, "age days", age, "screened", f["screened"])
+          assert f["screened"] > 200, "too few stocks analysed (Yahoo throttled?)"
+          assert age <= 6, "stale data"
+          PY
+      - name: Publish
+        run: |
+          git config user.name "weinstein-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs
+          git commit -m "Weekly screen $(date -u +%F)" || echo "no changes"
+          git push
