@@ -31,27 +31,87 @@ def load():
         return json.load(f)
 
 
+# ---------------------------------------------------------------- helpers
+def badges(r):
+    b = []
+    sc = r.get("triple_score")
+    if sc == 3:
+        b.append("<span class='bdg gold'>TRIPLE</span>")
+    elif sc:
+        b.append(f"<span class='bdg dim'>{sc}/3</span>")
+    if r.get("lr_virgin"):
+        b.append("<span class='bdg gold'>A+ 10-YR HIGH</span>")
+    return "".join(b)
+
+
+def long_range_line(r):
+    if r.get("lr_virgin"):
+        return "Virgin territory: a new 10-year high, no overhead supply (p.99)."
+    n = r.get("lr_near_years")
+    if n is None:
+        return ""
+    if n == 0:
+        return "No yearly high within 20% overhead on the 10-year view."
+    return (f"{n} of the last {r.get('lr_years', 10)} yearly highs sit within 20% overhead "
+            f"(nearest {money(r.get('lr_near_level'))}).")
+
+
+def triple_line(r):
+    sc = r.get("triple_score")
+    if sc is None:
+        return ""
+    parts = [("volume", r.get("triple_vol")), ("RS turning positive", r.get("triple_rs")),
+             ("40%+ run before breakout", r.get("triple_adv"))]
+    met = ", ".join(n for n, v in parts if v) or "none"
+    txt = f"Triple-confirmation check: {sc}/3 ({met})."
+    if sc == 3:
+        txt += " The book says to invest much more heavily in these (p.157)."
+    if r.get("stage_weeks") == 1 and r.get("triple_vol"):
+        txt += " Volume follow-through is still pending."
+    return txt
+
+
+def ticket(r, rules):
+    """The book's order: buy-stop just above the breakout, with a limit, GTC (p.66).
+    The book's example is a $12 stock: stop 1/8 over, limit 1/4 over (1/2 if thin).
+    Scaled here to the same percentages so it works at any price."""
+    lv = r["entry_low"]
+    if lv is None:
+        return ""
+    stop_px, lim_px, thin_px = lv * 1.0104, lv * 1.0208, lv * 1.0417
+    return (f"Order: BUY-STOP {money(stop_px)}, LIMIT {money(lim_px)} "
+            f"({money(thin_px)} if thinly traded), GTC.")
+
+
 # ---------------------------------------------------------------- cards
 def active_card(r, rules):
     lo, hi = r["entry_low"], r["entry_high"]
     if r["kind"] == "pullback":
         how = (f"Buy on the pullback, inside <b>{money(lo)} – {money(hi)}</b>. "
-               f"Price now {money(r['price'])}.")
+               f"Price now {money(r['price'])}. Volume has dried up, the book's cue (p.105). "
+               f"If you bought half on the breakout, this is the other half.")
         label = "PULLBACK BUY"
     elif r["kind"] == "base":
-        how = f"Buy-stop at <b>{money(lo)}</b>; skip it above {money(hi)}."
+        how = (f"Buy-stop at <b>{money(lo)}</b>; skip it above {money(hi)}. " + ticket(r, rules))
         label = "BREAKOUT BUY"
     else:
-        label = "CONTINUATION BUY" if r["verdict"].startswith("CONT") else "BREAKOUT BUY"
+        cont = r["verdict"].startswith("CONT")
+        label = "CONTINUATION BUY" if cont else "BREAKOUT BUY"
         how = (f"Buy on strength above <b>{money(lo)}</b>. "
-               f"Do not chase above <b>{money(hi)}</b> (+{rules['max_chase_pct']:.0f}%).")
+               f"Do not chase above <b>{money(hi)}</b> (+{rules['max_chase_pct']:.0f}%). "
+               + ticket(r, rules) + " "
+               + ("Continuation buys suit traders and late bull markets; buy the whole position "
+                  "at the breakout (p.61-63)." if cont else
+                  "Investors buy half at the breakout and half on the pullback if volume "
+                  "contracts (p.59); traders buy it all (p.59)."))
     per = rules["account_size"] / rules["positions"]
     return f"""
     <div class="abuy">
       <div class="abuy-top"><span class="tk">{e(r['ticker'])}</span>
         <span class="tag">{label}</span></div>
+      <div class="bdgs">{badges(r)}</div>
       <div class="abuy-sub">{e(r.get('group') or '')} · Stage 2 week {int(r['stage_weeks'])} ·
-        RS {num(r['rs'],1)} · volume {num(r['vol_ratio_4wk'],1)}x</div>
+        RS {num(r['rs'],1)} · breakout volume {num(r.get('bo_vol_ratio') or r['vol_ratio_4wk'],1)}x{' (3-4 wk build-up)' if r.get('bo_buildup') else ''}</div>
       <div class="levels">
         <div class="lv entry"><small>ENTRY</small><b>{money(lo)}</b>
           <em>up to {money(hi)}</em></div>
@@ -61,6 +121,7 @@ def active_card(r, rules):
       <p class="how">{how}</p>
       <p class="how">Stop goes in as a sell-stop the day you buy ({e(r.get('stop_basis') or 'base floor')},
         one-eighth under a round number). Raise it only as the stock builds new higher lows.</p>
+      <p class="how sm">{e(long_range_line(r))} {e(triple_line(r))}</p>
       <p class="size">Example size: {int(r['shares'])} sh ≈ ${per:,.0f}
         (1/{rules['positions']} of ${rules['account_size']:,.0f}) · resistance: {e(r['resistance_note'])}</p>
     </div>"""
@@ -68,7 +129,7 @@ def active_card(r, rules):
 
 def active_panel(d):
     rules = d["rules"]
-    a = d["active"]
+    a = sorted(d["active"], key=lambda r: -(r["risk_pct"] if r["risk_pct"] is not None else -99))
     if d["market_blocked"]:
         body = ("<div class='none stop4'><h3>Buying suspended</h3>"
                 "<p>The S&amp;P 500 is in Stage 4. The book says don't buy into a bearish "
@@ -109,7 +170,8 @@ def section(cls, title, sub, rows, cols, note=""):
 
 
 def tk(r):
-    return f"<b class='t'>{e(r['ticker'])}</b><span class='g'>{e(r.get('group') or '')}</span>"
+    return (f"<b class='t'>{e(r['ticker'])}</b><span class='g'>{e(r.get('group') or '')}</span>"
+            f"{badges(r)}")
 
 
 def res_cell(r):
@@ -163,9 +225,26 @@ def build(d):
     mcls = {1: "m1", 2: "m2", 3: "m3", 4: "m4"}.get(ms, "m3")
     mtxt = {1: "Stage 1 – basing", 2: "Stage 2 – advancing", 3: "Stage 3 – topping",
             4: "Stage 4 – declining"}.get(ms, f"Stage {ms}")
+    grs = d.get("groups_rs") or {}
     groups = "".join(
-        f"<span class='gc {'on' if s in (1, 2) else 'off'}'>{e(g)} <i>S{s if s else '?'}</i></span>"
+        f"<span class='gc {'on' if s in (1, 2) else 'off'}'>{e(g)} <i>S{s if s else '?'}"
+        f"{'' if grs.get(g) is None else f' · RS {grs[g]:+.0f}'}</i></span>"
         for g, s in sorted(d["groups"].items()))
+    mk = d.get("market") or {}
+    gl = "".join(
+        f"<li class='{g['status']}'><b>{e(g['name'])}</b><span>{e(g['detail'])}</span></li>"
+        for g in mk.get("gauges", []))
+    caution = ""
+    if mk.get("caution") and not blocked:
+        caution = ("<div class='caution'><b>Caution:</b> more market gauges are negative than positive. "
+                   "The book says to do very little buying and accept only A+ setups when the market "
+                   "trend is against you (p.75, p.154).</div>")
+    gauge_html = (f"<details class='gauges' {'open' if mk.get('caution') or blocked else ''}><summary>"
+                  f"Market weight of the evidence: {mk.get('pos', 0)} positive, {mk.get('neg', 0)} negative"
+                  f" ({len(mk.get('gauges', []))} gauges)</summary><ul>{gl}</ul>"
+                  "<p class='gnote'>Breadth gauges use the S&amp;P 1500 as a stand-in for the NYSE. "
+                  "Not tracked: price/dividend ratio, contrary opinion, weekly NYSE common-stock new highs.</p>"
+                  f"</details>{caution}") if gl else ""
     tiles = [("a", "Active buys", 0 if blocked else len(d["active"])),
              ("n", "Near misses", len(d["near"])),
              ("w", "Buy-stop watch", len(d["watch"])),
@@ -209,6 +288,7 @@ def build(d):
 <div class="mkt {mcls}"><b>S&amp;P 500: {mtxt}</b>
   <span>{'Buying suspended: the book says do not buy into a bearish market.' if blocked else 'Market trend permits buying.'}</span></div>
 <div class="groups"><small>SECTORS</small>{groups}</div>
+{gauge_html}
 <div class="tiles">{tile_html}</div>
 {active_panel(d)}
 {hid}
@@ -283,6 +363,16 @@ small{color:#8a93a5}.bad{color:#c0392b}
 .empty{padding:16px 18px;color:#8a93a5}.note{padding:8px 18px 12px;font-size:12px;color:#7a8396}
 footer{max-width:1040px;margin:26px auto 0;padding:0 24px;color:#5d6778;font-size:12.5px}
 footer h3{margin:0 0 6px;font-size:14px;color:#1c2333}.disc{font-size:11.5px;color:#8a93a5}
+.bdgs{margin:4px 0 0}.bdg{display:inline-block;border-radius:5px;padding:1px 7px;margin:0 4px 2px 0;font-size:10px;font-weight:800;letter-spacing:.6px}
+.bdg.gold{background:#ffe9a8;color:#7a5300}.bdg.dim{background:#e8eaef;color:#6b7689}
+td .bdg{margin-left:6px;vertical-align:middle}
+.how.sm{font-size:12px;color:#5d6778}
+.gauges{margin:12px 32px 0;background:#fff;border-radius:10px;padding:8px 14px;box-shadow:0 1px 3px rgba(20,30,60,.08);font-size:13px}
+.gauges summary{cursor:pointer;font-weight:600}.gauges ul{list-style:none;margin:8px 0 4px;padding:0}
+.gauges li{display:flex;justify-content:space-between;gap:12px;padding:5px 0 5px 12px;border-left:5px solid #b8bfcc;margin:3px 0}
+.gauges li.pos{border-color:#1f9d55}.gauges li.neg{border-color:#c0392b}.gauges li span{color:#5d6778;text-align:right}
+.gnote{margin:6px 0 2px;font-size:11.5px;color:#8a93a5}
+.caution{margin:10px 32px 0;background:#fff3d6;border-left:5px solid #e6a100;border-radius:8px;padding:10px 14px;font-size:13px;color:#7a5300}
 @media(max-width:640px){header,.mkt,.groups,.tiles{padding-left:16px;padding-right:16px}.levels{grid-template-columns:1fr}}
 """
 

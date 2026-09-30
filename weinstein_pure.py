@@ -54,10 +54,12 @@ import stage_vcp_screener as infra
 
 CFG = {
     # "a 30-week moving average (MA) is the best one for long-term investors"
-    # (p.13). Mansfield, which Weinstein used, plots it WEIGHTED: "the most
-    # recent action counts far more than the old input" (p.25).
+    # (p.13). The book's own instructions for calculating it are a SIMPLE
+    # average: add the 30 weeks, divide by 30 (p.313). Mansfield's charts plot
+    # a weighted one (p.25), but the method as Weinstein teaches it to the
+    # reader is the simple average.
     "ma_length": 30,
-    "ma_type": "WMA",
+    "ma_type": "SMA",
     "slope_lookback": 2,
     # "must no longer be declining" (p.14) -- flat qualifies, so a small
     # negative slope inside this band still counts as non-declining.
@@ -68,6 +70,20 @@ CFG = {
     # weekly volume for the prior four weeks" (p.105).
     "vol_base_weeks": 4,
     "breakout_vol_mult": 2.0,
+    # Second form of the volume test (p.104): "a volume build-up over the past
+    # three to four weeks that is at least twice the average volume of the past
+    # several weeks, coupled with at least some increase on the breakout week".
+    "buildup_weeks": 3,
+    "buildup_base_weeks": 4,
+    # Triple-confirmation pattern (p.150-152). The book: volume "more than
+    # twice" the prior four weeks with "several more weeks of heavy trading"
+    # after; RS "in negative territory or hugging the zero line" then moving
+    # "decisively into positive territory"; a prior rise of "some 40 to 50
+    # percent or more". Only the 2x and 40% are the book's numbers; the
+    # follow-through multiple and the zero-line band are ours.
+    "triple_follow_mult": 1.5,
+    "triple_rs_before_max": 3.0,
+    "triple_prior_advance_pct": 40.0,
     # On the pullback, "volume contracted by over 75 percent from peak levels"
     # (p.105): the pullback week must be at or below 25% of the breakout's peak
     # week. (pullback_vol_max is only a fallback when no peak can be measured.)
@@ -540,6 +556,93 @@ def overhead_resistance(weekly: pd.DataFrame, cfg: dict,
 # PER-STOCK ANALYSIS
 # ----------------------------------------------------------------------------
 
+def heavy_volume(vol, i, cfg):
+    """The book's breakout-volume test at weekly bar i (p.104).
+
+    (a) "a one-week volume spike that is at least twice the average volume of
+        the past month", or
+    (b) "a volume build-up over the past three to four weeks that is at least
+        twice the average volume of the past several weeks coupled with at
+        least some increase on the breakout week".
+    """
+    n = cfg["vol_base_weeks"]
+    out = {"ratio": np.nan, "spike": False, "buildup": False, "heavy": False}
+    if i < n or i >= len(vol):
+        return out
+    base = float(np.mean(vol[i - n:i]))
+    if base > 0:
+        out["ratio"] = float(vol[i]) / base
+        out["spike"] = out["ratio"] >= cfg["breakout_vol_mult"]
+    bw, pw = cfg["buildup_weeks"], cfg["buildup_base_weeks"]
+    if i >= bw + pw:
+        build = float(np.mean(vol[i - bw:i]))
+        prior = float(np.mean(vol[i - bw - pw:i - bw]))
+        out["buildup"] = bool(prior > 0 and build / prior >= cfg["breakout_vol_mult"]
+                              and vol[i] >= build)
+    out["heavy"] = bool(out["spike"] or out["buildup"])
+    return out
+
+
+def long_range(weekly10, price, near_pct=20.0):
+    """The Mansfield 10-year 'long-range perspective' (p.99): is the stock in
+    virgin territory, and how many of the past ten years' highs sit just above?"""
+    if weekly10 is None or len(weekly10) < 60:
+        return {}
+    w = weekly10.iloc[:-1] if len(weekly10) > 1 else weekly10
+    hi = float(w["High"].max())
+    yearly = w["High"].groupby(w.index.year).max()
+    above = [float(h) for h in yearly if h > price]
+    near = [h for h in above if h <= price * (1 + near_pct / 100)]
+    return {"lr_virgin": bool(price >= hi), "lr_hi10": round(hi, 2),
+            "lr_near_years": len(near), "lr_years": int(len(yearly)),
+            "lr_near_level": round(min(near), 2) if near else None}
+
+
+def breadth_gauges(closes, index_close):
+    """Breadth gauges from the book's Chapter 8, computed on the screened
+    universe (S&P 1500) rather than the NYSE: the A-D line versus the index
+    (p.275), the Momentum Index = 200-day average of daily net advances
+    (p.283), and net new highs minus new lows (p.287)."""
+    out = []
+    chg = closes.diff()
+    valid = chg.notna().sum(axis=1)
+    keep = valid >= 0.5 * closes.shape[1]
+    net = ((chg > 0).sum(axis=1) - (chg < 0).sum(axis=1))[keep]
+    if len(net) < 260:
+        return out
+    ad = net.cumsum()
+    mi = net.rolling(200).mean()
+    mi_now = float(mi.iloc[-1])
+    sign = np.sign(mi.dropna())
+    run = 0
+    for v in sign.iloc[::-1]:
+        if v == sign.iloc[-1]:
+            run += 1
+        else:
+            break
+    out.append({"name": "Momentum Index (200-day avg of net advances)",
+                "status": "pos" if mi_now > 0 else "neg",
+                "detail": f"{mi_now:+.0f}, {'above' if mi_now > 0 else 'below'} zero for {run} sessions"})
+    idx = index_close.reindex(ad.index).ffill()
+    near_hi = float(idx.iloc[-20:].max()) >= float(idx.iloc[-126:].max()) * 0.995
+    ad_conf = float(ad.iloc[-20:].max()) >= float(ad.iloc[-126:].max())
+    if near_hi and not ad_conf:
+        st, det = "neg", "index at a 6-month high, A-D line has not confirmed (negative divergence)"
+    elif near_hi:
+        st, det = "pos", "index and A-D line both at 6-month highs"
+    else:
+        st, det = "neutral", "index below its 6-month high; no divergence test"
+    out.append({"name": "Advance-decline line vs index", "status": st, "detail": det})
+    hi52 = closes.rolling(252, min_periods=252).max()
+    lo52 = closes.rolling(252, min_periods=252).min()
+    nh = (closes >= hi52).sum(axis=1)
+    nl = (closes <= lo52).sum(axis=1)
+    nn = (nh - nl).iloc[-20:].mean()
+    out.append({"name": "New 52-wk highs minus lows (20-day avg)",
+                "status": "pos" if nn > 0 else "neg", "detail": f"{nn:+.0f} per day"})
+    return out
+
+
 def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     if weekly is None or len(weekly) < cfg["ma_length"] + 12:
         return None
@@ -578,6 +681,13 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     base_vol = float(weekly["Volume"].iloc[-(n + 1):-1].mean())
     vol_ratio = float(weekly["Volume"].iloc[-1] / base_vol) if base_vol else np.nan
 
+    # the test applies to the BREAKOUT week (the first week of Stage 2), not
+    # to whatever week happens to be the latest one
+    vol_arr = weekly["Volume"].to_numpy(dtype=float)
+    bo_i = len(weekly) - dur
+    cur_v = heavy_volume(vol_arr, len(weekly) - 1, cfg)
+    bo_v = heavy_volume(vol_arr, bo_i, cfg) if stage == 2 else cur_v
+
     # --- pullback volume against the BREAKOUT's peak (p.105) ---
     # the peak is taken from the first weeks of this Stage 2 only; using any
     # high-volume week (an earnings spike, say) would make almost every
@@ -593,6 +703,19 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     k = cfg["rs_trend_weeks"]
     rs_improving = bool(len(rs_series.dropna()) > k
                         and rs > float(rs_series.iloc[-1 - k]))
+
+    # RS against the peak of the base (p.113): Acme's breakout had "the RS
+    # line lower than it was at point A, even though the price line was
+    # higher". Only matters when RS is also below zero.
+    rs_pk = np.nan
+    if stage == 2 and bo_i > 0:
+        pk_win = weekly["High"].iloc[max(0, bo_i - cfg["base_window"]):bo_i]
+        if len(pk_win):
+            try:
+                rs_pk = float(rs_series.loc[pk_win.idxmax()])
+            except Exception:
+                rs_pk = np.nan
+    rs_below_peak = bool(not np.isnan(rs) and not np.isnan(rs_pk) and rs < rs_pk)
 
     rng = trading_range(weekly, ma, cfg) or {}
 
@@ -671,6 +794,23 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         pre = weekly["Low"].iloc[base_start:start] if stage_base_weeks else \
             weekly["Low"].iloc[max(0, start - cfg["base_window"]):start]
         base_floor = float(pre.min()) if len(pre) else float(weekly["Low"].min())
+    # --- triple-confirmation pattern (p.150-152): flag only ---
+    triple = {"triple_vol": None, "triple_rs": None, "triple_adv": None, "triple_score": None}
+    if stage == 2 and bo_i >= cfg["vol_base_weeks"]:
+        nb = cfg["vol_base_weeks"]
+        pre = float(np.mean(vol_arr[bo_i - nb:bo_i]))
+        follow_ok = True
+        if dur > 1 and pre > 0:
+            follow_ok = float(np.mean(vol_arr[bo_i + 1:])) / pre >= cfg["triple_follow_mult"]
+        t_vol = bool(bo_v["spike"] and follow_ok)
+        rs_b = float(rs_series.iloc[bo_i - 1]) if bo_i - 1 < len(rs_series) else np.nan
+        t_rs = bool(not np.isnan(rs_b) and not np.isnan(rs) and rs_b <= cfg["triple_rs_before_max"]
+                    and rs > 0 and rs > rs_b)
+        t_adv = bool(base_floor > 0 and bo_level > 0
+                     and (bo_level / base_floor - 1) * 100 >= cfg["triple_prior_advance_pct"])
+        triple = {"triple_vol": t_vol, "triple_rs": t_rs, "triple_adv": t_adv,
+                  "triple_score": int(t_vol) + int(t_rs) + int(t_adv)}
+
     stop_base = book_stop(base_floor, cfg["stop_tick"])
     stop_cons = book_stop(cons_low, cfg["stop_tick"])
     stop = stop_base
@@ -696,8 +836,14 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "group_stage": group_stage,
         "vol_ratio_4wk": round(vol_ratio, 2) if not np.isnan(vol_ratio) else None,
         "vol_vs_peak": round(vol_vs_peak, 2) if not np.isnan(vol_vs_peak) else None,
+        "bo_vol_ratio": round(bo_v["ratio"], 2) if not np.isnan(bo_v["ratio"]) else None,
+        "bo_heavy": bool(bo_v["heavy"]),
+        "bo_buildup": bool(bo_v["buildup"] and not bo_v["spike"]),
+        "cur_heavy": bool(cur_v["heavy"]),
         "rs": round(rs, 1) if not np.isnan(rs) else None,
         "rs_improving": rs_improving,
+        "rs_at_peak": round(rs_pk, 1) if not np.isnan(rs_pk) else None,
+        "rs_below_peak": rs_below_peak,
         "breakout_level": round(bo_level, 2) if bo_level > 0 else None,
         "pct_above_breakout": round(pct_above_bo, 1) if not np.isnan(pct_above_bo) else None,
         "pct_above_ma": round((price / float(ma.iloc[-1]) - 1) * 100, 1),
@@ -715,6 +861,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "shares": int(dollars / price) if price else 0,
         "avg_dollar_vol_m": round(avg_dollar / 1e6, 1),
     }
+    m.update(triple)
     m.update({k2: v for k2, v in rng.items()})
     if rng:
         # "never enter your order to buy until after you've calculated exactly
@@ -774,7 +921,8 @@ def verdict(m, cfg):
     # relative strength (p.110, p.113)
     rs = m["rs"]
     if rs is not None and rs < 0:
-        if not m["rs_improving"] or rs < -cfg["rs_deep_negative"]:
+        if (not m["rs_improving"] or rs < -cfg["rs_deep_negative"]
+                or m.get("rs_below_peak")):
             return "AVOID - WEAK RS"
 
     # "Discard those that have overhead resistance nearby" (p.115). In the
@@ -785,7 +933,16 @@ def verdict(m, cfg):
         return "WATCH - RESISTANCE OVERHEAD"
 
     vol = m["vol_ratio_4wk"] or 0
-    heavy = vol >= cfg["breakout_vol_mult"]
+    # the breakout's volume is judged on the breakout week, by either of the
+    # book's two tests (p.104); older callers that only pass the latest week's
+    # ratio fall back to the simple 2x spike.
+    heavy_now = m.get("cur_heavy")
+    if heavy_now is None:
+        heavy_now = vol >= cfg["breakout_vol_mult"]
+    heavy_bo = m.get("bo_heavy")
+    if heavy_bo is None:
+        heavy_bo = heavy_now
+    heavy = heavy_now
     quiet = vol <= cfg["pullback_vol_max"]
     chase = cfg["max_chase_pct"]
 
@@ -810,7 +967,9 @@ def verdict(m, cfg):
     # rally that merely brushed the MA (p.71). Same width limit as any range.
     cw = m.get("consol_width_pct")
     is_consol = cw is None or cw <= cfg["base_max_width"] * 100
-    continuation = bool(m["new_high"] and heavy and m.get("consol_near_ma")
+    fresh_now = m["stage_weeks"] <= cfg["fresh_weeks"]
+    continuation = bool(m["new_high"] and (heavy_now or (fresh_now and heavy_bo))
+                        and m.get("consol_near_ma")
                         and is_consol and m.get("ma_state") == "Rising")
 
     def continuation_verdict():
@@ -829,7 +988,7 @@ def verdict(m, cfg):
             # out anew, that is the book's continuation buy (p.71) -- the stage
             # count merely reset when price dipped under the MA.
             return continuation_verdict() if continuation else NO_BASE_VERDICT
-        if not heavy:
+        if not heavy_bo:
             # "If the volume pattern is negative (not high enough on
             # breakout), sell the stock on the first rally" (p.116)
             return "SUSPECT - LOW VOLUME BREAKOUT"
@@ -932,6 +1091,8 @@ def main():
     p.add_argument("--positions", type=int)
     p.add_argument("--out", default="weinstein_results.csv")
     p.add_argument("--watchlist", default="weinstein_watchlist.txt")
+    p.add_argument("--no-breadth", action="store_true",
+                   help="skip the market-breadth gauges (screens favorable groups only; faster)")
     p.add_argument("--feed", help="dashboard JSON path (default weinstein_feed.json "
                    "on full runs)")
     p.add_argument("--chunk", type=int, default=100)
@@ -972,8 +1133,41 @@ def main():
         print("  Stage 4 -- Weinstein would be defensive here, not buying.",
               file=sys.stderr)
 
+    # Chapter 8's "Weight of the Evidence": stage analysis of the Dow is the one
+    # indicator "you have no choice" about (p.270); the world average (p.294)
+    # and General Motors (p.297) get the same 30-week stage test.
+    def _stage_of(tk):
+        try:
+            d = yf.download(tk, period="5y", interval="1d", auto_adjust=True, progress=False)
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = d.columns.droplevel(1)
+            wk = completed_weekly(d, args.include_partial)
+            m_ = infra.moving_average(wk["Close"], cfg["ma_length"], cfg["ma_type"])
+            return int(classify(wk, m_, cfg)[0].iloc[-1])
+        except Exception:
+            return None
+
+    STAGE_NAME = {1: "Stage 1 (basing)", 2: "Stage 2 (advancing)",
+                  3: "Stage 3 (topping)", 4: "Stage 4 (declining)"}
+
+    def _stage_gauge(name, st):
+        if st is None:
+            return None
+        status = "pos" if st == 2 else "neg" if st == 4 else "neutral"
+        return {"name": name, "status": status, "detail": STAGE_NAME.get(st, str(st))}
+
+    gauges = [_stage_gauge("S&P 500 vs 30-week MA", mkt_stage)]
+    dow_stage = _stage_of("^DJI")
+    gauges.append(_stage_gauge("Dow Jones Industrials vs 30-week MA", dow_stage))
+    gauges.append(_stage_gauge("World stock average (ACWI) vs 30-week MA", _stage_of("ACWI")))
+    gauges.append(_stage_gauge("General Motors vs 30-week MA", _stage_of("GM")))
+    gauges = [g for g in gauges if g]
+    if dow_stage == 4:
+        print("  Dow is Stage 4 -- suspend buying (p.270).", file=sys.stderr)
+
     # ---- 2. "Uncover the few groups that look best technically." ----
     groups = {}
+    groups_rs = {}
     gdata = yf.download(list(infra.SECTOR_ETFS.values()), period="4y",
                         interval="1wk", group_by="ticker",
                         auto_adjust=True, progress=False)
@@ -982,6 +1176,11 @@ def main():
             f = infra._extract_ticker_frame(gdata, etf).dropna()
             gma = infra.moving_average(f["Close"], cfg["ma_length"], cfg["ma_type"])
             groups[name] = int(classify(f, gma, cfg)[0].iloc[-1])
+            try:
+                groups_rs[name] = round(float(infra.mansfield_rs(
+                    f["Close"], index_weekly["Close"], cfg["rs_length"]).iloc[-1]), 1)
+            except Exception:
+                groups_rs[name] = None
         except Exception:
             groups[name] = None
     good = {g for g, s in groups.items() if s in (1, 2)}
@@ -1006,6 +1205,7 @@ def main():
                                 sectors=None)
         tickers, smap = infra.load_universe(ns)
 
+    universe_all = list(tickers)
     if smap and not args.all:
         before = len(tickers)
         tickers = [t for t in tickers if smap.get(t) in good]
@@ -1017,9 +1217,12 @@ def main():
 
     # ---- 4. fetch + analyse ----
     rows = []
-    have = [t for t in tickers if infra.is_cached(t)]
-    missing = [t for t in tickers if t not in set(have)]
-    print(f"Cache: {len(have)}/{len(tickers)}", file=sys.stderr)
+    want = list(tickers)
+    if smap and not args.no_breadth and not (args.tickers or args.file):
+        want = universe_all            # breadth needs the whole universe
+    have = [t for t in want if infra.is_cached(t)]
+    missing = [t for t in want if t not in set(have)]
+    print(f"Cache: {len(have)}/{len(want)}", file=sys.stderr)
 
     queue = list(missing)
     for rnd in range(max(1, args.rounds)):
@@ -1059,6 +1262,19 @@ def main():
         print("No stocks analysed -- is the cache populated?", file=sys.stderr)
         return
 
+    if smap and not args.no_breadth and not (args.tickers or args.file):
+        try:
+            cl = {}
+            for t in universe_all:
+                dd = infra.load_cached(t)
+                if dd is not None and not dd.empty:
+                    cl[t] = dd["Close"].tail(520)
+            closes = pd.DataFrame(cl)
+            gauges += breadth_gauges(closes, idx["Close"])
+            print(f"Breadth gauges computed on {closes.shape[1]} stocks", file=sys.stderr)
+        except Exception as exc:
+            print(f"  breadth skipped: {exc}", file=sys.stderr)
+
     df = pd.DataFrame(rows)
     out_path = args.out
     if (args.tickers or args.file) and args.out == "weinstein_results.csv":
@@ -1069,11 +1285,11 @@ def main():
         print_detail(df)
 
     # "Don't buy when the overall market trend is bearish." (p.139)
-    blocked = (mkt_stage == 4) and not args.all
+    blocked = (mkt_stage == 4 or dow_stage == 4) and not args.all
     if blocked:
         print("=" * 84)
-        print("MARKET (S&P 500) IS IN STAGE 4.  Weinstein: don't buy when the overall market "
-              "trend is bearish (p.139).")
+        print("MARKET (S&P 500 or Dow) IS IN STAGE 4.  Weinstein: don't buy when the overall market "
+              "trend is bearish (p.139, p.270).")
         print("All buys below are SUPPRESSED; run with --all to see them anyway.")
         print("=" * 84 + "\n")
 
@@ -1142,6 +1358,23 @@ def main():
         ref = r["breakout_level"] if fresh else r["consol_top"]
         return (ref, ref * chase)
 
+    # the 10-year "long-range perspective" (p.99) for the names that matter
+    _cand = pd.concat([buys, skips, watch, watch_skip, waits, near])["ticker"].unique().tolist()
+    lr = {}
+    if _cand and (args.feed or not (args.tickers or args.file)):
+        try:
+            g10 = yf.download(_cand, period="10y", interval="1wk", group_by="ticker",
+                              auto_adjust=True, progress=False)
+            _px = dict(zip(df["ticker"], df["price"]))
+            for tk_ in _cand:
+                try:
+                    f10 = infra._extract_ticker_frame(g10, tk_).dropna()
+                    lr[tk_] = long_range(f10, _px[tk_])
+                except Exception:
+                    pass
+        except Exception as exc:
+            print(f"  long-range check skipped: {exc}", file=sys.stderr)
+
     def _pack(frame_, table, stop_col="stop", pct_col="stop_pct"):
         out = []
         for _, r in frame_.iterrows():
@@ -1153,7 +1386,10 @@ def main():
                 "rs", "resistance_note", "resistance_level", "resistance_pct",
                 "resistance_age_wks", "resistance_weeks_over", "pct_to_trigger",
                 "range_weeks", "range_width_pct", "pct_above_breakout", "breakout_level",
-                "shares", "avg_dollar_vol_m", "stop_basis")}
+                "shares", "avg_dollar_vol_m", "stop_basis", "bo_vol_ratio", "bo_buildup",
+                "triple_vol", "triple_rs", "triple_adv", "triple_score", "rs_at_peak",
+                "base_weeks_before", "range_bottom", "group_stage")}
+            d.update(lr.get(r["ticker"], {}))
             d["verdict"] = r["verdict"]
             d["kind"] = kind
             if table in ("watch", "watch_skip"):
@@ -1179,7 +1415,13 @@ def main():
         "generated": _dt.datetime.now().isoformat(timespec="minutes"),
         "last_bar": str(index_weekly.index[-1].date()),
         "market_stage": mkt_stage, "market_blocked": bool(blocked),
-        "groups": groups, "favorable_groups": sorted(good),
+        "groups": groups, "groups_rs": groups_rs, "favorable_groups": sorted(good),
+        "market": {"gauges": gauges,
+                   "pos": sum(g["status"] == "pos" for g in gauges),
+                   "neg": sum(g["status"] == "neg" for g in gauges),
+                   "caution": sum(g["status"] == "neg" for g in gauges)
+                              > sum(g["status"] == "pos" for g in gauges),
+                   "dow_stage": dow_stage},
         "screened": int(len(df)),
         "rules": {"wide_stop_pct": cfg["wide_stop_pct"], "max_chase_pct": cfg["max_chase_pct"],
                   "breakout_vol_mult": cfg["breakout_vol_mult"],

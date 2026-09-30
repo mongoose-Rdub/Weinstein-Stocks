@@ -346,6 +346,56 @@ d3=pd.bdate_range("2026-03-02","2026-04-02")         # Good Friday: ends Thu
 assert W.completed_weekly(pd.DataFrame({"Open":1.,"High":1.,"Low":1.,"Close":1.,"Volume":100.},index=d3),today="2026-04-03").index[-1]==pd.Timestamp("2026-04-03")
 ok("Mon-Wed run uses last Friday; complete and holiday weeks are kept")
 
+print("\n11. Breakout volume: the book's two tests (p.104), judged on the breakout week")
+cfgv=dict(W.CFG)
+v=np.array([100,100,100,100,250,100,100],float)       # 2.5x spike at i=4
+r=W.heavy_volume(v,4,cfgv); assert r["spike"] and r["heavy"], r
+v=np.array([100,100,100,100,150,100],float)           # 1.5x: not heavy
+assert not W.heavy_volume(v,4,cfgv)["heavy"]
+# build-up: 4 quiet weeks at 100, then three weeks at 220, breakout week 230 (vs build-up mean 220)
+v=np.array([100,100,100,100,220,220,220,230],float)
+r=W.heavy_volume(v,7,cfgv); assert r["buildup"] and not r["spike"] and r["heavy"], r
+# build-up but the breakout week is LOWER than the build-up: fails the 'some increase' clause
+v=np.array([100,100,100,100,220,220,220,200],float)
+assert not W.heavy_volume(v,7,cfgv)["buildup"]
+ok("2x spike, or a 2x build-up with an increase on the breakout week")
+# verdict uses the breakout week, not the latest one
+base=dict(stage=2,stage_weeks=2,price=110.0,ma30=100.0,rs=5.0,rs_improving=True,
+          vol_ratio_4wk=1.1,base_weeks_before=30,after_advance=False,new_high=False,
+          consol_near_ma=False,consol_width_pct=10.0,ma_state="Rising",
+          pct_above_breakout=3.0,vol_vs_peak=None,resistance_clear=True)
+assert W.verdict(dict(base,bo_heavy=True,cur_heavy=False),W.CFG)=="BREAKOUT - BUY"
+assert W.verdict(dict(base,bo_heavy=False,cur_heavy=False),W.CFG)=="SUSPECT - LOW VOLUME BREAKOUT"
+ok("week-2 stock keeps its breakout-week volume verdict")
+
+print("\n11b. RS lower than at the base's peak (p.113)")
+weak=dict(base,rs=-4.0,rs_improving=True,rs_below_peak=True,bo_heavy=True)
+assert W.verdict(weak,W.CFG)=="AVOID - WEAK RS"
+assert W.verdict(dict(weak,rs_below_peak=False),W.CFG)=="BREAKOUT - BUY"
+assert W.verdict(dict(weak,rs=4.0),W.CFG)=="BREAKOUT - BUY"      # positive RS unaffected
+ok("negative RS below its earlier peak is rejected; positive RS is not")
+
+print("\n11c. Ten-year long-range view (p.99)")
+idx=pd.date_range("2016-01-01",periods=520,freq="W-FRI")
+hi=pd.Series(np.linspace(20,40,520),index=idx)
+w10=pd.DataFrame({"High":hi,"Low":hi*0.9,"Close":hi*0.95},index=idx)
+lr=W.long_range(w10,price=100.0); assert lr["lr_virgin"] and lr["lr_near_years"]==0
+lr=W.long_range(w10,price=35.0); assert not lr["lr_virgin"] and lr["lr_near_years"]>=1
+ok("virgin territory and nearby yearly highs identified")
+
+print("\n11d. Market breadth gauges (Ch.8)")
+rng_=np.random.RandomState(1)
+dates=pd.bdate_range("2024-01-01",periods=400)
+up=pd.DataFrame(100+np.cumsum(rng_.normal(0.15,1,(400,60)),axis=0),index=dates)
+g=W.breadth_gauges(up,up.mean(axis=1))
+names={x["name"][:8]:x for x in g}
+assert len(g)==3, g
+assert names["Momentum"]["status"]=="pos", names["Momentum"]
+dn=pd.DataFrame(100+np.cumsum(rng_.normal(-0.15,1,(400,60)),axis=0),index=dates)
+g=W.breadth_gauges(dn,dn.mean(axis=1))
+assert {x["name"][:8]:x for x in g}["Momentum"]["status"]=="neg"
+ok("momentum index and new-high/low gauge read a rising and a falling market")
+
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize
