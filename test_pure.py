@@ -1,5 +1,5 @@
 import sys, numpy as np, pandas as pd
-sys.path.insert(0,"/sessions/hopeful-busy-allen/mnt/Desktop/Weinstein Script")
+import os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import weinstein_pure as W
 cfg=dict(W.CFG)
 ok=lambda s: print(f"  [OK] {s}")
@@ -349,7 +349,8 @@ ok("Mon-Wed run uses last Friday; complete and holiday weeks are kept")
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize
-path="/sessions/hopeful-busy-allen/mnt/Desktop/Weinstein Script/weinstein_pure.py"
+import os
+path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"weinstein_pure.py")
 tree=ast.parse(open(path).read())
 for node in ast.walk(tree):
     if isinstance(node,(ast.Module,ast.FunctionDef,ast.ClassDef)) and ast.get_docstring(node):
