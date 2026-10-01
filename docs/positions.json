@@ -1,35 +1,6 @@
 {
- "generated": "2026-10-01T15:07",
- "last_bar": "2026-09-25",
- "positions": [
-  {
-   "ticker": "WTS",
-   "style": "trader",
-   "buy_date": "2026-10-01",
-   "buy_price": 357.0,
-   "price": 357.79,
-   "gain_pct": 0.2,
-   "stage": 2,
-   "ma30": 330.21,
-   "pct_above_ma": 8.4,
-   "stop": 340.13,
-   "stop_pct": -4.9,
-   "your_stop": null,
-   "status": "HOLD",
-   "notes": [
-    "Stage 2, above a rising average: hold and let the stop do the work (p.186)."
-   ],
-   "swing_target": null,
-   "swing_gain_pct": null,
-   "stop_steps": [
-    [
-     "2026-07-03",
-     340.13
-    ]
-   ],
-   "hit": null,
-   "last_bar": "2026-09-25"
-  }
- ],
+ "generated": "2026-10-01T10:17-05:00",
+ "last_bar": "",
+ "positions": [],
  "closed": []
 }
