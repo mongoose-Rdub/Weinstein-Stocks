@@ -114,3 +114,16 @@ for p in ("/tmp/_sec.json", "/tmp/_sec2.json"):
     if os.path.exists(p): os.remove(p)
 ok("no price/volume floor by default; blank-check shells excluded; sectors from three sources in order")
 print("\nUNIVERSE TESTS PASSED")
+
+print("\nSecurity-name filter keeps ordinary shares and ADRs")
+import re as _re, stage_vcp_screener as _S
+_rx=_re.compile("|".join(_S.EXCLUDE_NAME_REGEX))
+for _n in ("Nokia Corporation Sponsored American Depositary Shares","Wright Medical Group N.V. Ordinary Shares",
+           "Bright Horizons Family Solutions Inc. - Common Stock","Copyright Clearance Center Common Stock",
+           "Toyota Motor Corporation American Depositary Shares","ASML Holding N.V. - New York Registry Shares"):
+    assert not _rx.search(_n.lower()), _n
+for _n in ("Acme Corp Warrants","Acme Corp Rights","Acme Acquisition Corp Units",
+           "Bank of X Depositary Shares, each representing a 1/40th interest in a share of 5.5% Series B Preferred Stock",
+           "Acme Corp 6.5% Notes due 2030","XYZ 7.25% Fixed Rate Cumulative Preferred"):
+    assert _rx.search(_n.lower()), _n
+print("  [OK] ADRs and names containing 'right'/'unit' are kept; warrants, rights, units, preferreds, notes dropped")

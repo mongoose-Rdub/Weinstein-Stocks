@@ -232,11 +232,17 @@ DATA_SOURCE = "yahoo"
 
 # Non-common securities to strip out of the symbol directory. Warrants, rights
 # and units are what produce the "$XXXXW: possibly delisted" noise.
-EXCLUDE_NAME_PATTERNS = (
-    "warrant", "right", " unit", "units", "preferred", "depositary",
-    "depository", "% note", "notes due", "debenture", "trust preferred",
-    "convertible", "when issued", "test stock",
+# Whole-word patterns for securities that are not ordinary shares. (Plain
+# substring matching wrongly dropped "Copyright", "Wright", "Bright Horizons",
+# "Citizens United" and every "American Depositary Share" such as Nokia.)
+EXCLUDE_NAME_REGEX = (
+    r"\bwarrants?\b", r"\brights?\b", r"\bunits?\b", r"\bpreferred\b",
+    r"\bdepositary shares?,? each representing (a |an )?(1/|one[- ])?\d*[/-]?\w* ?(interest|fractional)",
+    r"\b1/\d+(th)?\b", r"% note", r"\bnotes? due\b", r"\bdebentures?\b",
+    r"\bsenior notes?\b", r"\bsubordinated\b", r"\bconvertible\b",
+    r"\bwhen issued\b", r"\btest stock\b",
 )
+EXCLUDE_NAME_PATTERNS = EXCLUDE_NAME_REGEX      # kept for older imports
 
 NASDAQ_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
@@ -989,9 +995,10 @@ def load_all_us_listed():
             df = df[df["ETF"] != "Y"]
         # Drop warrants / rights / units / preferreds by security name -- far
         # more reliable than guessing from the 5th letter of the symbol.
+        import re
+        rx = re.compile("|".join(EXCLUDE_NAME_REGEX))
         names = df[name_col].astype(str).str.lower()
-        mask = ~names.apply(
-            lambda n: any(pat in n for pat in EXCLUDE_NAME_PATTERNS))
+        mask = ~names.apply(lambda n: bool(rx.search(n)))
         df = df[mask]
         return df[[sym_col]].rename(columns={sym_col: "sym"})
 
