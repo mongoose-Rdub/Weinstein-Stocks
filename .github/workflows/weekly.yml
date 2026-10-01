@@ -47,6 +47,7 @@ jobs:
           mkdir -p docs data
           python build_dashboard.py weinstein_feed.json docs/index.html
           cp weinstein_feed.json docs/weinstein_feed.json
+          cp weinstein_feed_positions.json docs/positions.json
       - name: Sanity check the data is this week's
         run: |
           python - <<'PY'
@@ -66,5 +67,18 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add docs data
           git commit -m "Weekly screen $(date -u +%F)" || echo "no changes"
+          git pull --rebase
           git push
 
+      - name: Post the link to Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then echo "No webhook configured; skipping"; exit 0; fi
+          export WEEK=$(python -c "import json;print(json.load(open('weinstein_feed.json'))['last_bar'])")
+          export PAGE="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+          python - <<'PY' | curl -sS -f -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK_URL" || echo "::warning::Discord post failed"
+          import json, os
+          print(json.dumps({"content": f"Weinstein dashboard updated, week ending {os.environ['WEEK']}: {os.environ['PAGE']}"}))
+          PY
