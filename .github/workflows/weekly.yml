@@ -16,7 +16,7 @@ concurrency:
 jobs:
   screen:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,12 +25,26 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Unit tests
-        run: python test_pure.py
-      - name: Run screener (yfinance can throttle; script pauses and retries)
-        run: python weinstein_pure.py --universe sp1500 --rounds 8 --feed weinstein_feed.json
+        run: |
+          python test_pure.py
+          python test_universe.py
+      - name: Restore price cache (so each week only downloads the newest bars)
+        uses: actions/cache/restore@v4
+        with:
+          path: .price_cache
+          key: prices-${{ github.run_id }}
+          restore-keys: prices-
+      - name: Run screener on the whole US market (adapts to Yahoo throttling)
+        run: python weinstein_pure.py --universe all --time-budget 280 --feed weinstein_feed.json
+      - name: Save price cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .price_cache
+          key: prices-${{ github.run_id }}
       - name: Build dashboard
         run: |
-          mkdir -p docs
+          mkdir -p docs data
           python build_dashboard.py weinstein_feed.json docs/index.html
           cp weinstein_feed.json docs/weinstein_feed.json
       - name: Sanity check the data is this week's
@@ -40,14 +54,16 @@ jobs:
           f = json.load(open("weinstein_feed.json"))
           last = d.date.fromisoformat(f["last_bar"])
           age = (d.date.today() - last).days
-          print("last bar", last, "age days", age, "screened", f["screened"])
-          assert f["screened"] > 200, "too few stocks analysed (Yahoo throttled?)"
+          cv = f.get("coverage", {})
+          print("last bar", last, "age days", age, "screened", f["screened"], "coverage", cv)
           assert age <= 6, "stale data"
+          assert cv.get("analysed", 0) >= 0.5 * max(cv.get("universe", 1), 1), \
+              "fewer than half the universe was analysed (Yahoo and Stooq both throttled?)"
           PY
       - name: Publish
         run: |
           git config user.name "weinstein-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add docs
+          git add docs data
           git commit -m "Weekly screen $(date -u +%F)" || echo "no changes"
           git push
