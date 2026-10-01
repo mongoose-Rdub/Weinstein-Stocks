@@ -1,0 +1,40 @@
+name: Update positions
+
+# Runs within about a minute of any change to positions.csv: refreshes the
+# positions panel on the dashboard without re-running the whole-market screen.
+on:
+  push:
+    paths:
+      - "positions.csv"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weinstein
+  cancel-in-progress: false
+
+jobs:
+  positions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Update positions
+        run: |
+          mkdir -p docs
+          python weinstein_pure.py --positions-only --positions-file positions.csv --positions-out docs/positions.json
+      - name: Publish
+        run: |
+          git config user.name "weinstein-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/positions.json
+          git commit -m "Update positions" || echo "no changes"
+          git pull --rebase
+          git push
