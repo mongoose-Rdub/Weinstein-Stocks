@@ -11,6 +11,8 @@ import sys
 from datetime import datetime
 
 EMBED_LIMIT = 1_500_000
+REPO = os.environ.get("GITHUB_REPOSITORY") or "mongoose-Rdub/Weinstein-Stocks"
+BRANCH = os.environ.get("POSITIONS_BRANCH") or "main"
 FEED = sys.argv[1] if len(sys.argv) > 1 else "weinstein_feed.json"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "weinstein_dashboard.html"
 e = html.escape
@@ -48,6 +50,8 @@ def badges(r):
         b.append(f"<span class='bdg dim'>{sc}/3</span>")
     if r.get("lr_virgin") is True:
         b.append("<span class='bdg gold'>A+ 10-YR HIGH</span>")
+    if r.get("vol_verify") is True:
+        b.append("<span class='bdg thin' title='Breakout volume is extreme (20x+); possible split or corporate-event artifact. Check the chart.'>VERIFY VOLUME</span>")
     if r.get("liq") in ("thin", "very thin"):
         b.append(f"<span class='bdg thin'>{'VERY THIN' if r['liq'] == 'very thin' else 'THIN'}</span>")
     return "".join(b)
@@ -115,6 +119,34 @@ def exit_line(r):
     return txt
 
 
+def profit_plan(r):
+    """How the book says to take profits (Chapter 6). Investors get no price
+    target: the trailing stop is the exit. Targets exist only for traders."""
+    inv = ("<b>Investor (the book's default):</b> no price target. Raise the stop after the first 8-10% "
+           "correction, but only once the stock rallies back near its prior high: put it under the "
+           "correction low, or under the 30-week average if that is lower and still rising. When the "
+           "average flattens, tighten it under the latest correction low. Sell <b>half</b> at the first "
+           "sign of a Stage 3 top; the stop takes out the rest (p.36-37, p.184-186). "
+           "Don't sell just because it feels high (p.165).")
+    if r.get("overextended") is True:
+        inv += (f" <b>It is already {num(r.get('pct_above_ma'), 0)}% above its 30-week average:</b> the book "
+                f"says to lock in a quarter to a half of the position when a stock gets far above it (p.193).")
+    tr = []
+    ts = r.get("trader_stop")
+    if not _bad(ts):
+        tr.append(f"stop {money(ts)} ({pct(r.get('trader_stop_pct'))}), a closer stop than the investor's: "
+                  f"strong breakouts rarely fall more than 4-6% below the breakout (p.194)")
+    if not _bad(r.get("swing_target")):
+        tr.append(f"swing-rule target <b>{money(r['swing_target'])}</b> ({pct(r.get('swing_gain_pct'))}): "
+                  f"old peak {money(r.get('swing_peak'))} minus the low {money(r.get('swing_low'))}, "
+                  f"added to the peak. Sell part near it, the rest on the stop (p.202-205)")
+    tr.append("sell half if a rising trendline touched 3+ times breaks (p.199); out if it closes under the "
+              "30-week average even slightly (p.196)")
+    trd = "<b>Trader only:</b> " + "; ".join(tr) + "."
+    return (f"<details class='exitplan'><summary>Taking profits (book guidance)</summary>"
+            f"<p>{inv}</p><p>{trd}</p></details>")
+
+
 # ---------------------------------------------------------------- cards
 def active_card(r, rules):
     lo, hi = r["entry_low"], r["entry_high"]
@@ -154,6 +186,7 @@ def active_card(r, rules):
       <p class="how">Stop goes in as a sell-stop the day you buy ({e(r.get('stop_basis') or 'base floor')},
         one-eighth under a round number). Raise it only as the stock builds new higher lows.</p>
       <p class="how sm">{e(exit_line(r))}</p>
+      {profit_plan(r)}
       <p class="how sm">{e(long_range_line(r))} {e(triple_line(r))}</p>
       <p class="size">Example size: {int(r['shares'])} sh ≈ ${r['shares'] * r['price']:,.0f}
         (1/{rules['positions']} of ${rules['account_size']:,.0f}{', capped at ~5% of average daily volume' if r.get('liq') in ('thin', 'very thin') else ''})
@@ -350,6 +383,7 @@ def build(d):
 <div class="tiles">{tile_html}</div>
 {lookup_html}
 {active_panel(d)}
+{POS_SECTION}
 {hid}
 <main>{''.join(sections)}</main>
 <footer>
@@ -362,6 +396,105 @@ def build(d):
   Signals are mechanical and can be wrong; verify on the chart and size risk yourself. Data: Yahoo Finance, Friday weekly closes.
   Rules follow <i>Secrets for Profiting in Bull and Bear Markets</i>; thresholds the book does not specify are the author's choices.</p>
 </footer></body></html>"""
+
+
+POS_SECTION = """
+<section class="pos-wrap" id="positions">
+  <h2 class="pos-h">My Positions <span class="pos-sub">tracked against the book's selling rules</span></h2>
+  <div id="posbox"><div class="empty">Loading positions...</div></div>
+  <div id="posclosed"></div>
+  <details class="poslog"><summary>Owner: log a trade</summary>
+    <p>This only prepares a line. It is saved by pasting it into <code>positions.csv</code> on GitHub, which only the
+    repository owner can edit, so visitors cannot add or change positions. No share counts or dollar values are recorded.</p>
+    <div class="pf">
+      <label><input type="radio" name="pmode" value="buy" checked> I bought</label>
+      <label><input type="radio" name="pmode" value="sell"> I sold</label>
+    </div>
+    <form id="posform" autocomplete="off">
+      <div class="pfrow" id="pf-buy">
+        <input id="pf-tk" placeholder="Ticker" maxlength="8" aria-label="Ticker">
+        <input id="pf-dt" type="date" aria-label="Buy date">
+        <input id="pf-px" type="number" step="0.01" min="0" placeholder="Buy price" aria-label="Buy price">
+        <select id="pf-st" aria-label="Style"><option value="investor">Investor</option><option value="trader">Trader</option></select>
+        <input id="pf-sp" type="number" step="0.01" min="0" placeholder="Your stop (optional)" aria-label="Your stop">
+      </div>
+      <div class="pfrow" id="pf-sell" style="display:none">
+        <select id="pf-which" aria-label="Which position"></select>
+        <input id="pf-sd" type="date" aria-label="Sell date">
+        <input id="pf-spx" type="number" step="0.01" min="0" placeholder="Sell price" aria-label="Sell price">
+      </div>
+      <button type="submit">Copy line and open positions.csv</button>
+    </form>
+    <div id="pf-out"></div>
+  </details>
+</section>
+<script>
+(function(){
+var REPO="__REPO__",BR="__BR__",URL="https://github.com/"+REPO+"/edit/"+BR+"/positions.csv";
+var P=null;
+function el(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!==undefined)n.textContent=x;return n;}
+function $(v){return v==null?"\u2013":"$"+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function pc(v){return v==null?"\u2013":(v>=0?"+":"")+Number(v).toFixed(1)+"%";}
+function cell(g,l,v){var d=el('div');d.appendChild(el('small','',l));d.appendChild(el('b','',v));g.appendChild(d);}
+function cls(s){return s.indexOf('SELL')==0?'sell':s.indexOf('RAISE')==0?'raise':s.indexOf('TAKE')==0?'take':'hold';}
+function render(D){
+  P=D;var box=document.getElementById('posbox');box.textContent="";
+  var ps=D.positions||[];
+  if(!ps.length){box.appendChild(el('div','empty',"No open positions logged."));}
+  ps.forEach(function(p){
+    var c=el('div','pcard '+cls(p.status));
+    var top=el('div','ptop');top.appendChild(el('span','ptk',p.ticker));top.appendChild(el('span','pchip',p.status));
+    top.appendChild(el('small','',p.style+" \u00b7 bought "+p.buy_date+" at "+$(p.buy_price)));c.appendChild(top);
+    var g=el('div','pgrid');
+    cell(g,'Price',$(p.price));cell(g,'Gain',pc(p.gain_pct));cell(g,'Stage',String(p.stage));
+    cell(g,'Book stop',$(p.stop)+(p.your_stop!=null?" (yours "+$(p.your_stop)+")":""));
+    cell(g,'To stop',pc(p.stop_pct));cell(g,'Above 30-wk avg',pc(p.pct_above_ma));
+    if(p.swing_target!=null)cell(g,'Swing target',$(p.swing_target));
+    c.appendChild(g);
+    var ul=el('ul','pnotes');(p.notes||[]).forEach(function(n){ul.appendChild(el('li','',n));});c.appendChild(ul);
+    box.appendChild(c);});
+  var cl=document.getElementById('posclosed');cl.textContent="";
+  if((D.closed||[]).length){
+    cl.appendChild(el('h3','pos-h2',"Closed trades"));
+    var t=el('table','ptab');var h=el('tr');["Ticker","Style","Bought","Sold","Result"].forEach(function(x){h.appendChild(el('th','',x));});
+    t.appendChild(h);
+    D.closed.forEach(function(r){var tr=el('tr');
+      [r.ticker,r.style,r.buy_date+" at "+$(r.buy_price),r.sell_date+" at "+$(r.sell_price),pc(r.gain_pct)].forEach(function(x,i){
+        var td=el('td','',x);if(i==4)td.className=r.gain_pct>=0?'gain':'loss';tr.appendChild(td);});t.appendChild(tr);});
+    cl.appendChild(t);}
+  var sel=document.getElementById('pf-which');sel.textContent="";
+  ps.forEach(function(p,i){var o=el('option','',p.ticker+" bought "+p.buy_date+" at "+$(p.buy_price));o.value=String(i);sel.appendChild(o);});
+}
+fetch('positions.json',{cache:'no-cache'}).then(function(r){return r.json();}).then(render)
+ .catch(function(){document.getElementById('posbox').textContent="No positions logged yet.";});
+var today=new Date().toISOString().slice(0,10);
+document.getElementById('pf-dt').value=today;document.getElementById('pf-sd').value=today;
+Array.prototype.forEach.call(document.getElementsByName('pmode'),function(r){r.addEventListener('change',function(){
+  var sell=document.querySelector('input[name=pmode]:checked').value=='sell';
+  document.getElementById('pf-buy').style.display=sell?'none':'';document.getElementById('pf-sell').style.display=sell?'':'none';});});
+document.getElementById('posform').addEventListener('submit',function(ev){
+  ev.preventDefault();var out=document.getElementById('pf-out');out.textContent="";var line="",how="";
+  var sell=document.querySelector('input[name=pmode]:checked').value=='sell';
+  if(!sell){
+    var tk=document.getElementById('pf-tk').value.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,"");
+    var dt=document.getElementById('pf-dt').value,px=document.getElementById('pf-px').value;
+    if(!tk||!dt||!px){out.textContent="Enter a ticker, date and price.";return;}
+    line=[tk,dt,px,document.getElementById('pf-st').value,document.getElementById('pf-sp').value].join(",");
+    how="Paste this as a new last line in positions.csv, then commit. The positions update runs in about a minute.";
+  }else{
+    var p=P&&P.positions&&P.positions[document.getElementById('pf-which').value];
+    var sd=document.getElementById('pf-sd').value,sp=document.getElementById('pf-spx').value;
+    if(!p||!sd||!sp){out.textContent="Pick the position and enter the sell date and price.";return;}
+    line=[p.ticker,p.buy_date,p.buy_price,p.style,p.your_stop==null?"":p.your_stop,sd,sp].join(",");
+    how="Replace that position's existing line in positions.csv with this one, then commit.";
+  }
+  out.appendChild(el('code','',line));out.appendChild(el('p','',how));
+  try{navigator.clipboard.writeText(line);out.appendChild(el('p','',"The line is copied to your clipboard."));}catch(e){}
+  window.open(URL,'_blank','noopener');
+});
+})();
+</script>"""
+POS_SECTION = POS_SECTION.replace("__REPO__", REPO).replace("__BR__", BRANCH)
 
 
 LOOKUP_JS = r"""
@@ -499,6 +632,21 @@ td .bdg{margin-left:6px;vertical-align:middle}
 .ck i{font-style:normal;font-weight:800;width:18px;text-align:center;flex:none}.ck b{width:150px;flex:none}.ck span{color:#3b4456}
 .ck.pass i{color:#1f9d55}.ck.fail i{color:#c0392b}.ck.warn i{color:#d19200}.ck.na i{color:#9aa3b4}
 .ck.fail b{color:#a52a1d}.lkfoot{margin:10px 0 0;font-size:11.5px;color:#8a93a5}
+.exitplan{margin:8px 0 0;font-size:12.5px;background:#fff;border:1px solid #cfe7d8;border-radius:8px;padding:6px 10px}
+.exitplan summary{cursor:pointer;font-weight:700;color:#157a41}.exitplan p{margin:6px 0;color:#3b4456}
+.pos-wrap{max-width:1040px;margin:18px auto;padding:0 20px}.pos-h{margin:0 0 10px;font-size:20px}.pos-sub{font-size:12px;font-weight:400;color:#6b7689;margin-left:8px}
+.pos-h2{margin:14px 0 6px;font-size:15px}.ptab{width:100%;background:#fff;border-radius:10px;overflow:hidden}.ptab td.gain{color:#157a41;font-weight:700}.ptab td.loss{color:#c0392b;font-weight:700}
+.poslog{margin-top:14px;background:#fff;border-radius:10px;padding:8px 14px;font-size:13px;box-shadow:0 1px 3px rgba(20,30,60,.08)}.poslog summary{cursor:pointer;font-weight:600;color:#1d4f7a}
+.pfrow{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.pfrow input,.pfrow select{padding:8px 10px;border:2px solid #cfd6e3;border-radius:8px;font-size:14px}.pf{display:flex;gap:16px;margin:8px 0}
+#posform button{padding:9px 16px;border:0;border-radius:8px;background:#1d4f7a;color:#fff;font-weight:700;cursor:pointer}#pf-out code{display:block;margin:10px 0 4px;padding:8px 10px;background:#f3f5f9;border-radius:6px;word-break:break-all}
+.pcard{background:#fff;border-radius:12px;border-left:8px solid #999;box-shadow:0 1px 3px rgba(20,30,60,.08);padding:14px 18px;margin:0 0 14px}
+.pcard.sell{border-color:#c0392b}.pcard.raise{border-color:#e6a100}.pcard.take{border-color:#2f7fd6}.pcard.hold{border-color:#1f9d55}
+.ptop{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.ptk{font-size:24px;font-weight:800}
+.pchip{color:#fff;font-weight:800;font-size:12px;letter-spacing:.8px;padding:4px 10px;border-radius:6px}
+.pcard.sell .pchip{background:#c0392b}.pcard.raise .pchip{background:#d19200}.pcard.take .pchip{background:#2f7fd6}.pcard.hold .pchip{background:#1f9d55}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:10px 0 4px}
+.pgrid div small{display:block;font-size:10.5px;letter-spacing:.7px;text-transform:uppercase}.pgrid div b{font-size:16px}
+.pnotes{margin:6px 0 0;padding-left:18px;font-size:13px;color:#3b4456}
 @media(max-width:640px){.ck{flex-wrap:wrap}.ck b{width:auto}}
 @media(max-width:640px){header,.mkt,.groups,.tiles{padding-left:16px;padding-right:16px}.levels{grid-template-columns:1fr}}
 """

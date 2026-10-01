@@ -1,0 +1,8 @@
+# Your positions, kept public for accountability. One line per trade.
+# ticker,buy_date,buy_price,style,stop,sell_date,sell_price
+#   style: investor (default) or trader
+#   stop: the sell-stop you actually have in (optional)
+#   sell_date, sell_price: fill in when you sell; the trade moves to "Closed trades"
+# No share counts or dollar values: the dashboard shows prices and percentages only.
+# Easiest way to add a line: the "Owner: log a trade" box on the dashboard.
+ticker,buy_date,buy_price,style,stop,sell_date,sell_price

@@ -39,7 +39,10 @@ of METHOD below is derived from the book, with page references.
 """
 
 import argparse
+import csv
+import io
 import math
+import os
 import sys
 import time
 
@@ -91,7 +94,8 @@ CFG = {
     # week. (pullback_vol_max is only a fallback when no peak can be measured.)
     "pullback_vol_max": 0.75,
     "pullback_vol_peak_max": 0.25,
-    "breakout_peak_weeks": 4,    # weeks from Stage 2 entry that set the "peak"
+    "vol_verify_mult": 20.0,     # breakout volume this many x normal = suspect data (split / relisting artifact); flagged, not dropped. Not from the book.
+    "breakout_peak_weeks": 4,   # weeks from Stage 2 entry that set the "peak"
 
     # Trading-range (Stage 1 base) detection. "This basing action can go on for
     # months or, in some cases, years" (p.33).
@@ -187,6 +191,22 @@ CFG = {
     "range_scan_weeks": 260,
     "ceiling_scan_weeks": 78,    # how far before Stage 2 to look for a range ceiling     # how far back to measure real base length
     "min_price": 0.0,
+
+    # ---- taking profits (Chapter 6, p.164-213) ----
+    # The book gives investors NO price targets: the exit is the trailing
+    # sell-stop (p.184-186). Targets exist only for traders: the swing rule
+    # (p.202-205), a trendline sale of half (p.198-201), and a tight stop.
+    "overextended_pct": 40.0,      # "far above its 30-week MA" (p.193): no figure in the book; OURS
+    "overextended_sell_frac": "1/4 to 1/2",   # the book's range for the partial sale (p.193)
+    "swing_lookback_weeks": 156,   # how far before the breakout to look for the peak A; OURS
+    "swing_min_decline_pct": 20.0, # the decline A->B must be "important"; OURS
+    "swing_max_gain_pct": 100.0,   # ignore projections more than this far above price; OURS
+    "trader_stop_pct": 5.0,        # "4 to 6 percent below the breakout" (p.194): midpoint
+    "trader_low_weeks": 8,         # "closest prior reaction low": looked for in this many weeks; OURS
+    "trader_stop_max_pct": 8.0,    # a reaction low deeper than this is not "closest"; OURS
+    "trader_correction_pct": 0.07, # "corrections of less than 7 percent" are ignored (p.195)
+    "trail_recover_frac": 0.5,     # "back toward the prior high" = half way (p.184); same reading as the buy side
+    "stage3_investor_sell_frac": "half",      # p.36-37
 }
 
 BUY_VERDICTS = {"BREAKOUT - BUY", "CONTINUATION - BUY", "PULLBACK - BUY"}
@@ -650,6 +670,286 @@ def breadth_gauges(closes, index_close):
     return out
 
 
+def swing_target(weekly, bo_i, price, cfg):
+    """The swing rule (p.202-205): "take the peak price before an important
+    decline sets in and subtract the next low price from it... add the 10
+    points onto the peak price of A once XYZ betters the old peak". A trading
+    target only: "sell at least a part of your position near the projection".
+
+    A is the highest high in the look-back before the breakout week bo_i; B is
+    the lowest low after A. Returns None when there was no important decline,
+    when the target has already been passed, or when it is implausibly far.
+    """
+    if bo_i is None or bo_i < 20:
+        return None
+    H = weekly["High"].to_numpy()
+    L = weekly["Low"].to_numpy()
+    lo = max(0, bo_i - cfg["swing_lookback_weeks"])
+    seg = H[lo:bo_i]
+    if len(seg) < 20:
+        return None
+    a_i = lo + int(np.argmax(seg))
+    A = float(H[a_i])
+    if a_i + 1 > bo_i:
+        return None
+    B = float(L[a_i + 1:bo_i + 1].min())
+    if A <= 0 or B <= 0 or (A - B) / A * 100 < cfg["swing_min_decline_pct"]:
+        return None
+    T = A + (A - B)
+    gain = (T / price - 1) * 100 if price else float("nan")
+    if not np.isfinite(gain) or gain < 3.0 or gain > cfg["swing_max_gain_pct"]:
+        return None
+    return {"swing_peak": round(A, 2), "swing_low": round(B, 2),
+            "swing_target": round(T, 2), "swing_gain_pct": round(gain, 1),
+            "swing_cleared": bool(float(H[bo_i:].max()) > A)}
+
+
+def trader_stop(weekly, bo_i, bo_level, cfg):
+    """A trader's initial stop (p.194-195): "under the closest prior reaction
+    low. If there isn't any, ... 4 to 6 percent below the breakout level",
+    beneath a round number (under $20 every half point counts as one)."""
+    if not bo_level or bo_level <= 0:
+        return None
+    lo = float(weekly["Low"].iloc[max(0, bo_i - cfg["trader_low_weeks"]):bo_i].min()) \
+        if bo_i and bo_i > 0 else None
+    if lo is not None and bo_level * (1 - cfg["trader_stop_max_pct"] / 100) <= lo < bo_level:
+        return book_stop(lo, cfg["stop_tick"])
+    return book_stop(bo_level * (1 - cfg["trader_stop_pct"] / 100), cfg["stop_tick"])
+
+
+def trail_stop(weekly, ma, start, cfg, trader=False):
+    """Replay the book's trailing sell-stop (p.184-186, p.195-196) from the
+    start of Stage 2 to the latest bar and return (stop, steps).
+
+    Investor: after a correction of 8%+ the stop is raised, but only once the
+    stock has rallied back toward its prior high; it goes under the correction
+    low, or under the 30-week MA if that sits lower while it is still rising.
+    Once the MA flattens, it goes under the correction low even if that is
+    above the MA (p.185-186). Trader: corrections under 7% are ignored and the
+    stop sits under the correction low, never the MA (p.195-196).
+    Stops only move up. steps = [(bar index, new stop), ...].
+    """
+    H = weekly["High"].to_numpy()
+    L = weekly["Low"].to_numpy()
+    C = weekly["Close"].to_numpy()
+    M = ma.to_numpy()
+    cpct = cfg["trader_correction_pct"] if trader else cfg["stop_correction_pct"]
+    rec = cfg["trail_recover_frac"]
+    lb = cfg["slope_lookback"]
+    stop, steps = None, []
+    peak = -np.inf
+    in_corr, trough, corr_peak = False, None, None
+    for i in range(max(start, 0), len(H)):
+        if not in_corr:
+            peak = max(peak, H[i])
+            if L[i] <= peak * (1 - cpct):
+                in_corr, trough, corr_peak = True, L[i], peak
+        else:
+            trough = min(trough, L[i])
+            if C[i] >= trough + (corr_peak - trough) * rec:
+                level = trough
+                if not trader and i - lb >= 0 and not np.isnan(M[i]) and not np.isnan(M[i - lb]):
+                    rising = (M[i] - M[i - lb]) / abs(M[i - lb]) > cfg["ma_flat_tol"]
+                    if rising:
+                        level = min(trough, M[i])
+                cand = book_stop(level, cfg["stop_tick"])
+                if stop is None or cand > stop:
+                    stop = cand
+                    steps.append((i, round(cand, 2)))
+                in_corr = False
+                peak = max(corr_peak, H[i])
+    return stop, steps
+
+
+def position_status(pos, weekly, ma, stages, cfg):
+    """Where an open position stands this week, by the book's selling rules.
+
+    pos: ticker, buy_date, buy_price, optional style ('investor'/'trader'),
+    shares, stop (the stop the owner actually has in). Returns a dict with a
+    status and the reasons, never an order: the stop remains the owner's."""
+    style = str(pos.get("style") or "investor").strip().lower()
+    trader = style.startswith("t")
+    n = len(weekly)
+    price = float(weekly["Close"].iloc[-1])
+    buy_px = float(pos["buy_price"])
+    bdate = pd.Timestamp(pos["buy_date"])
+    after = np.where(weekly.index >= bdate)[0]
+    buy_i = int(after[0]) if len(after) else n - 1
+    stv = np.asarray(stages)
+    # the Stage 2 run that contains (or last preceded) the purchase
+    s2 = buy_i
+    if stv[min(buy_i, n - 1)] == 2:
+        while s2 > 0 and stv[s2 - 1] == 2:
+            s2 -= 1
+    else:
+        s2 = max(0, buy_i - cfg["base_window"])
+    start = s2
+    pre = weekly["Low"].iloc[max(0, start - cfg["base_window"]):max(start, 1)]
+    floor = float(pre.min()) if len(pre) else float(weekly["Low"].iloc[start])
+    init = book_stop(floor, cfg["stop_tick"])
+    bo_level = float(weekly["High"].iloc[max(0, start - cfg["base_window"]):max(start, 1)].max()) \
+        if start > 0 else buy_px
+    if trader:
+        init = trader_stop(weekly, start, bo_level, cfg) or init
+    trail, steps = trail_stop(weekly, ma, start, cfg, trader=trader)
+    stop = max(x for x in (init, trail) if x is not None)
+    # was the stop already hit since the purchase?
+    hit = None
+    cur = max([init] + [s for j, s in steps if j <= buy_i])
+    stage_at_buy = int(stv[min(buy_i, n - 1)])
+    if cur >= buy_px:                       # a stop above the purchase price means it was not a Stage 2 entry
+        cur = min(init, book_stop(buy_px * 0.92, cfg["stop_tick"]))
+    sched = dict(steps)
+    for i in range(buy_i + 1, n):
+        if weekly["Low"].iloc[i] <= cur and hit is None:
+            hit = (weekly.index[i].date().isoformat(), cur)
+        if i in sched:
+            cur = max(cur, sched[i])
+    last_stage = int(stv[-1]) if len(stv) else 0
+    ma_now = float(ma.iloc[-1])
+    ext = (price / ma_now - 1) * 100 if ma_now else float("nan")
+    sw = swing_target(weekly, start, price, cfg) if start > 0 else None
+    your_stop = pos.get("stop")
+    try:
+        your_stop = float(your_stop) if your_stop not in (None, "") else None
+    except (TypeError, ValueError):
+        your_stop = None
+
+    notes, status = [], "HOLD"
+
+    if stage_at_buy != 2:
+        notes.append(f"bought while the stock was in Stage {stage_at_buy}; the book buys only Stage 2 breakouts and "
+                     f"pullbacks (p.139), so the stop history here is approximate.")
+    if hit:
+        status = "SELL - STOP HIT"
+        notes.append(f"price traded through the book stop ({hit[1]:.2f}) in the week of {hit[0]}: "
+                     f"sell, don't wait for a rally (p.176).")
+    elif last_stage == 4:
+        status = "SELL - STAGE 4"
+        notes.append("Stage 4 decline: out (p.39). Stocks drop fast once they enter it.")
+    elif last_stage == 3:
+        if trader:
+            status = "SELL - STAGE 3 TOP"
+            notes.append("Stage 3 top: a trader should get out with the profit (p.36).")
+        else:
+            status = "SELL HALF - STAGE 3"
+            notes.append("Stage 3 top: investors sell half, protect the rest with a stop under the new support (p.36-37).")
+    elif trader and price < ma_now:
+        status = "SELL - BELOW 30-WK MA"
+        notes.append("A trader never stays with a stock that closes under its 30-week average, even by a fraction (p.196).")
+    elif trader and bo_level and price < bo_level and (buy_i >= start) and n - 1 - start <= 12:
+        status = "SELL - BACK UNDER BREAKOUT"
+        notes.append("Great trades rarely drop back below the breakout point (p.208).")
+    else:
+        if your_stop is not None and stop > your_stop * 1.005:
+            status = "RAISE STOP"
+            notes.append(f"the book's trailing method puts the stop at {stop:.2f}; yours is {your_stop:.2f}.")
+        if np.isfinite(ext) and ext >= cfg["overextended_pct"]:
+            if status == "HOLD":
+                status = "TAKE PARTIAL - OVEREXTENDED"
+            notes.append(f"{ext:.0f}% above the 30-week average: 'very overextended', lock in "
+                         f"{cfg['overextended_sell_frac']} of the position and trail the rest (p.193). "
+                         f"The {cfg['overextended_pct']:.0f}% trigger is not from the book.")
+        if sw and trader and price >= sw["swing_target"] * 0.97:
+            if status == "HOLD":
+                status = "TAKE PARTIAL - SWING TARGET"
+            notes.append(f"at the swing-rule target ({sw['swing_target']:.2f}): sell at least part (p.205).")
+    if status == "HOLD" and not notes:
+        notes.append("Stage 2, above a rising average: hold and let the stop do the work (p.186).")
+    return {
+        "ticker": pos["ticker"], "style": "trader" if trader else "investor",
+        "buy_date": bdate.date().isoformat(), "buy_price": round(buy_px, 2),
+        "price": round(price, 2),
+        "gain_pct": round((price / buy_px - 1) * 100, 1),
+        "stage": last_stage, "ma30": round(ma_now, 2), "pct_above_ma": round(ext, 1),
+        "stop": round(float(stop), 2), "stop_pct": round((stop / price - 1) * 100, 1),
+        "your_stop": your_stop, "status": status, "notes": notes,
+        "swing_target": sw["swing_target"] if sw else None,
+        "swing_gain_pct": sw["swing_gain_pct"] if sw else None,
+        "stop_steps": [(weekly.index[i].date().isoformat(), s) for i, s in steps][-4:],
+        "hit": hit,
+    }
+
+
+POSITION_COLS = ["ticker", "buy_date", "buy_price", "style", "stop", "sell_date", "sell_price"]
+
+
+def parse_positions(text):
+    """Positions from CSV text. Columns (a header row may reorder them):
+    ticker, buy_date, buy_price, style (investor/trader), stop (the stop you
+    actually have in), sell_date, sell_price. Share counts are deliberately not
+    read: the page shows prices and percentages, never position values.
+    Blank lines and lines starting with # are ignored."""
+    rows, cols = [], list(POSITION_COLS)
+    for raw in csv.reader(io.StringIO(text or "")):
+        cells = [c.strip() for c in raw]
+        if not cells or not cells[0] or cells[0].startswith("#"):
+            continue
+        if cells[0].lower() in ("ticker", "symbol"):
+            names = {"symbol": "ticker", "date": "buy_date", "price": "buy_price",
+                     "buy": "buy_price", "exit_date": "sell_date", "exit_price": "sell_price"}
+            cols = [names.get(c.lower(), c.lower()) for c in cells]
+            continue
+        if len(cells) < 3:
+            continue
+        d = {cols[i]: cells[i] for i in range(min(len(cols), len(cells))) if cells[i]}
+        try:
+            row = {"ticker": d["ticker"].upper().replace(".", "-"),
+                   "buy_date": str(pd.Timestamp(d["buy_date"]).date()),
+                   "buy_price": float(d["buy_price"].replace("$", "").replace(",", ""))}
+            if d.get("style"):
+                row["style"] = d["style"].lower()
+            if d.get("stop"):
+                row["stop"] = d["stop"].replace("$", "")
+            if d.get("sell_date") and d.get("sell_price"):
+                row["sell_date"] = str(pd.Timestamp(d["sell_date"]).date())
+                row["sell_price"] = float(d["sell_price"].replace("$", "").replace(",", ""))
+        except Exception:
+            continue
+        rows.append(row)
+    return rows
+
+
+def compute_positions(rows, cfg, include_partial=False, loader=None):
+    """Status for every open position, plus the closed trades. loader(ticker)
+    returns daily bars; by default the price cache, then Yahoo."""
+    import yfinance as yf
+
+    def default_loader(t):
+        d = uf.load_any(t)
+        if d is None or d.empty:
+            d = yf.download(t, period="4y", interval="1d", auto_adjust=True, progress=False)
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = d.columns.droplevel(1)
+        return d
+
+    loader = loader or default_loader
+    opened, closed = [], []
+    for p in rows:
+        if p.get("sell_date"):
+            closed.append({"ticker": p["ticker"], "style": str(p.get("style") or "investor"),
+                           "buy_date": p["buy_date"], "buy_price": round(p["buy_price"], 2),
+                           "sell_date": p["sell_date"], "sell_price": round(p["sell_price"], 2),
+                           "gain_pct": round((p["sell_price"] / p["buy_price"] - 1) * 100, 1)})
+            continue
+        try:
+            w = completed_weekly(loader(p["ticker"]), include_partial)
+            if len(w) < cfg["ma_length"] + 12:
+                print(f"  position {p['ticker']}: not enough history", file=sys.stderr)
+                continue
+            ma = infra.moving_average(w["Close"], cfg["ma_length"], cfg["ma_type"])
+            st, _ = classify(w, ma, cfg)
+            r = position_status(p, w, ma, st.to_numpy(), cfg)
+            r["last_bar"] = w.index[-1].date().isoformat()
+            opened.append(r)
+        except Exception as exc:
+            print(f"  position {p['ticker']} skipped: {exc}", file=sys.stderr)
+    order = {"SELL": 0, "RAISE": 1, "TAKE": 2, "HOLD": 3}
+    opened.sort(key=lambda r: (order.get(r["status"].split()[0], 9), r["ticker"]))
+    closed.sort(key=lambda r: r["sell_date"], reverse=True)
+    return opened, closed
+
+
 def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     if weekly is None or len(weekly) < cfg["ma_length"] + 12:
         return None
@@ -664,8 +964,19 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     if cfg["min_dollar_volume"] and avg_dollar < cfg["min_dollar_volume"]:
         return None
     adv_shares = float(daily["Volume"].tail(50).mean()) if daily is not None and len(daily) else 0.0
-    liq = ("very thin" if avg_dollar < cfg["very_thin_dollar_volume"]
-           else "thin" if avg_dollar < cfg["thin_dollar_volume"] else "normal")
+    # liquidity is judged on the LATEST four completed weeks as well as the
+    # 50-day average; the lower of the two governs, so a stock that has gone
+    # quiet is not treated as it was in a busier spell
+    rec_sh = float(weekly["Volume"].tail(4).mean()) / 5
+    rec_dollar = rec_sh * price
+    if np.isfinite(rec_dollar) and rec_dollar > 0:
+        if rec_dollar < avg_dollar:
+            adv_shares = min(adv_shares, rec_sh) if adv_shares > 0 else rec_sh
+        avg_dollar_liq = min(avg_dollar, rec_dollar)
+    else:
+        avg_dollar_liq = avg_dollar
+    liq = ("very thin" if avg_dollar_liq < cfg["very_thin_dollar_volume"]
+           else "thin" if avg_dollar_liq < cfg["thin_dollar_volume"] else "normal")
     if not np.isfinite(avg_dollar) or avg_dollar <= 0:
         return None                      # no trading at all: nothing to screen
 
@@ -707,6 +1018,20 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     start = len(weekly) - dur
     win = weekly["Volume"].iloc[start:min(start + cfg["breakout_peak_weeks"], len(weekly) - 1)]
     peak_vol = float(win.max()) if len(win) else 0.0
+    # A breakout-week volume far outside the ordinary (20x+) usually means a
+    # split, relisting or corporate event rather than buying demand. Flag it,
+    # and measure the pullback against the busiest ORDINARY week instead, so one
+    # distorted bar cannot make every later week look "dried up".
+    vol_verify = bool((bo_v["ratio"] == bo_v["ratio"] and bo_v["ratio"] >= cfg["vol_verify_mult"])
+                      or (cur_v["ratio"] == cur_v["ratio"] and cur_v["ratio"] >= cfg["vol_verify_mult"]))
+    if vol_verify and stage == 2:
+        ordinary = []
+        for j in range(start, len(weekly) - 1):
+            r = heavy_volume(vol_arr, j, cfg)["ratio"]
+            if r == r and r < cfg["vol_verify_mult"]:
+                ordinary.append(vol_arr[j])
+        if ordinary:
+            peak_vol = float(max(ordinary))
     vol_vs_peak = float(weekly["Volume"].iloc[-1] / peak_vol) if peak_vol else np.nan
 
     # --- relative strength (p.110-113) ---
@@ -814,7 +1139,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         follow_ok = True
         if dur > 1 and pre > 0:
             follow_ok = float(np.mean(vol_arr[bo_i + 1:])) / pre >= cfg["triple_follow_mult"]
-        t_vol = bool(bo_v["spike"] and follow_ok)
+        t_vol = bool(bo_v["spike"] and follow_ok and not vol_verify)
         rs_b = float(rs_series.iloc[bo_i - 1]) if bo_i - 1 < len(rs_series) else np.nan
         t_rs = bool(not np.isnan(rs_b) and not np.isnan(rs) and rs_b <= cfg["triple_rs_before_max"]
                     and rs > 0 and rs > rs_b)
@@ -854,6 +1179,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "bo_vol_ratio": round(bo_v["ratio"], 2) if not np.isnan(bo_v["ratio"]) else None,
         "bo_heavy": bool(bo_v["heavy"]),
         "bo_buildup": bool(bo_v["buildup"] and not bo_v["spike"]),
+        "vol_verify": vol_verify,
         "cur_heavy": bool(cur_v["heavy"]),
         "rs": round(rs, 1) if not np.isnan(rs) else None,
         "rs_improving": rs_improving,
@@ -874,12 +1200,25 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "trail_stop_pct": round((stop_trail - price) / price * 100, 1) if stop_trail is not None else None,
         "wide_stop": bool((stop - price) / price * 100 < -cfg["wide_stop_pct"]),
         "shares": int(dollars / price) if price else 0,
-        "avg_dollar_vol_m": round(avg_dollar / 1e6, 3),
-        "adv_dollars": round(avg_dollar, 0),
+        "avg_dollar_vol_m": round(avg_dollar_liq / 1e6, 3),
+        "adv_dollars": round(avg_dollar_liq, 0),   # lower of 50-day and latest 4 weeks
         "adv_shares": round(adv_shares, 0),
         "liq": liq,
     }
     m.update(triple)
+    # exit guidance (Chapter 6): trader stop, swing-rule target, overextension
+    m["overextended"] = bool(stage == 2 and m["pct_above_ma"] >= cfg["overextended_pct"])
+    m["trader_stop"] = m["trader_stop_pct"] = None
+    m["swing_target"] = m["swing_gain_pct"] = m["swing_peak"] = m["swing_low"] = None
+    m["swing_cleared"] = None
+    if stage == 2 and bo_level > 0:
+        ts_ = trader_stop(weekly, bo_i, bo_level, cfg)
+        if ts_ is not None and ts_ < price:
+            m["trader_stop"] = round(ts_, 2)
+            m["trader_stop_pct"] = round((ts_ - price) / price * 100, 1)
+        sw_ = swing_target(weekly, bo_i, price, cfg)
+        if sw_:
+            m.update(sw_)
     m.update({k2: v for k2, v in rng.items()})
     if rng:
         # "never enter your order to buy until after you've calculated exactly
@@ -1111,6 +1450,12 @@ def explain(m, cfg, mkt=None):
             add("Breakout volume", "fail" if fresh else "warn",
                 f"{when}: {rtxt}; needs 2x or a 3-4 week build-up (p.104)", "p.104")
 
+    if stage == 2 and m.get("vol_verify"):
+        add("Volume data check", "warn",
+            f"breakout volume of {f(m.get('bo_vol_ratio') or m.get('vol_ratio_4wk'), 0)}x normal is far outside the ordinary. "
+            f"That often comes from a split, relisting or corporate event rather than buying. Check the chart; "
+            f"pullback volume is measured against the busiest ordinary week instead", "p.104")
+
     # 7. relative strength
     rs = m.get("rs")
     if rs is None:
@@ -1300,6 +1645,11 @@ def main():
                    help="skip the market-breadth gauges (screens favorable groups only; faster)")
     p.add_argument("--feed", help="dashboard JSON path (default weinstein_feed.json "
                    "on full runs)")
+    p.add_argument("--positions-file", default="positions.csv",
+                   help="your open positions (CSV); see positions.csv")
+    p.add_argument("--positions-only", action="store_true",
+                   help="update only the positions file (fast; no market screen)")
+    p.add_argument("--positions-out", default="positions.json")
     p.add_argument("--chunk", type=int, default=100)
     p.add_argument("--max-new", type=int, default=150)
     p.add_argument("--rounds", type=int, default=6)
@@ -1324,6 +1674,18 @@ def main():
         cfg["positions"] = args.positions
 
     import yfinance as yf
+
+    if args.positions_only:
+        import json as _j, datetime as _d
+        txt = open(args.positions_file).read() if os.path.exists(args.positions_file) else ""
+        op, cl = compute_positions(parse_positions(txt), cfg, args.include_partial)
+        bars = [r["last_bar"] for r in op if r.get("last_bar")]
+        with open(args.positions_out, "w") as f:
+            _j.dump({"generated": _d.datetime.now().isoformat(timespec="minutes"),
+                     "last_bar": max(bars) if bars else "", "positions": op, "closed": cl},
+                    f, indent=1, default=str)
+        print(f"positions: {len(op)} open, {len(cl)} closed -> {args.positions_out}")
+        return
 
     # ---- 1. "Check the major trend of the overall market." (p.115) ----
     idx = yf.download("^GSPC", period="5y", interval="1d",
@@ -1587,9 +1949,11 @@ def main():
                 "rs", "resistance_note", "resistance_level", "resistance_pct",
                 "resistance_age_wks", "resistance_weeks_over", "pct_to_trigger",
                 "range_weeks", "range_width_pct", "pct_above_breakout", "breakout_level",
-                "shares", "avg_dollar_vol_m", "adv_dollars", "liq", "stop_basis", "bo_vol_ratio", "bo_buildup",
+                "shares", "avg_dollar_vol_m", "adv_dollars", "liq", "vol_verify", "stop_basis", "bo_vol_ratio", "bo_buildup",
                 "triple_vol", "triple_rs", "triple_adv", "triple_score", "rs_at_peak",
-                "base_weeks_before", "range_bottom", "group_stage")}
+                "base_weeks_before", "range_bottom", "group_stage", "ma30", "pct_above_ma",
+                "trader_stop", "trader_stop_pct", "swing_target", "swing_gain_pct",
+                "swing_peak", "swing_low", "swing_cleared", "overextended")}
             d.update(lr.get(r["ticker"], {}))
             d["verdict"] = r["verdict"]
             d["kind"] = kind
@@ -1678,12 +2042,20 @@ def main():
                      **{("u_" + k): v for k, v in umeta.items()}},
     }
     _lookup_doc = {"l": _look, "u": sorted(set(universe_all))}
+
+    # ---- open positions: where each stands by the book's selling rules ----
+    _pos_text = open(args.positions_file).read() if os.path.exists(args.positions_file) else ""
+    _pos_out, _pos_closed = compute_positions(parse_positions(_pos_text), cfg, args.include_partial)
+
     if args.feed or not (args.tickers or args.file):
         _fp = args.feed or "weinstein_feed.json"
         with open(_fp, "w") as _f:
             _json.dump(_feed, _f, indent=1)
         with open(_fp.replace(".json", "") + "_lookup.json", "w") as _f:
             _json.dump(_lookup_doc, _f, separators=(",", ":"))
+        with open(_fp.replace(".json", "") + "_positions.json", "w") as _f:
+            _json.dump({"generated": _feed["generated"], "last_bar": _feed["last_bar"],
+                        "positions": _pos_out, "closed": _pos_closed}, _f, indent=1, default=str)
 
     n_suppressed = 0
     if blocked:
