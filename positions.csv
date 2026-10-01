@@ -6,3 +6,4 @@
 # No share counts or dollar values: the dashboard shows prices and percentages only.
 # Easiest way to add a line: the "Owner: log a trade" box on the dashboard.
 ticker,buy_date,buy_price,style,stop,sell_date,sell_price
+WTS,2026-10-01,357,trader,
