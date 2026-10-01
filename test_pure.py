@@ -396,6 +396,41 @@ g=W.breadth_gauges(dn,dn.mean(axis=1))
 assert {x["name"][:8]:x for x in g}["Momentum"]["status"]=="neg"
 ok("momentum index and new-high/low gauge read a rising and a falling market")
 
+print("\n12. Ticker lookup explains each rule")
+mm=dict(stage=2,stage_weeks=9,price=110.0,ma30=100.0,ma_state="Rising",group="Tech",group_stage=2,
+        base_weeks_before=30,after_advance=False,bo_vol_ratio=3.0,bo_heavy=True,bo_buildup=False,
+        rs=4.0,rs_improving=True,rs_below_peak=False,resistance_clear=True,resistance_note="clear",
+        pct_above_breakout=4.0,breakout_level=105.8,vol_vs_peak=0.2,stop=96.0,stop_pct=-12.7,
+        stop_basis="base floor",trail_stop=98.0,trail_stop_pct=-10.9,wide_stop=False,
+        verdict="PULLBACK - BUY",triple_score=0)
+ck=W.explain(mm,W.CFG,{"blocked":False}); st={c[0]:c[1] for c in ck}
+assert st["Pullback volume"]=="pass" and st["Stop within 15%"]=="pass" and st["Sector"]=="pass", st
+assert "dried up" in [c for c in ck if c[0]=="Pullback volume"][0][2]
+bad=W.explain(dict(mm,vol_vs_peak=0.5,group_stage=4,resistance_clear=False,resistance_note="HEAVY +2% (9wk)",
+                   rs=-3.0,rs_improving=False),W.CFG,{"blocked":True})
+sb={c[0]:c[1] for c in bad}
+assert sb["Market trend"]=="fail" and sb["Sector"]=="fail" and sb["Overhead resistance"]=="fail" \
+   and sb["Relative strength"]=="fail" and sb["Pullback volume"]=="fail", sb
+assert "Stage 4" in W.headline("SUSPENDED - MARKET",mm,bad) or "suspended" in W.headline("SUSPENDED - MARKET",mm,bad).lower()
+far=W.explain(dict(mm,pct_above_breakout=25.0,verdict="STAGE 2 - HOLD",stop=50,stop_pct=-50),W.CFG,{})
+assert {c[0]:c[1] for c in far}["Stop within 15%"]=="na"
+ok("passes, fails, and not-yet-applicable checks are reported with reasons")
+
+print("\n12b. Thinly traded stocks are flagged, not dropped")
+thin=W.explain(dict(mm,liq="thin",adv_dollars=400000.0),W.CFG,{})
+assert {c[0]:c[1] for c in thin}["Liquidity"]=="warn" and "half a point" in [c for c in thin if c[0]=="Liquidity"][0][2]
+norm=W.explain(dict(mm,liq="normal",adv_dollars=5e7),W.CFG,{})
+assert {c[0]:c[1] for c in norm}["Liquidity"]=="pass"
+assert W.CFG["min_price"]==0 and W.CFG["min_dollar_volume"]==0
+# a cheap, quiet stock is analysed and sized down
+idx2=pd.date_range("2024-01-05",periods=140,freq="W-FRI")
+px=pd.Series(np.concatenate([np.linspace(2.0,1.0,40),np.linspace(1.0,1.05,50),np.linspace(1.05,2.2,50)]),index=idx2)
+wk=pd.DataFrame({"Open":px,"High":px*1.02,"Low":px*0.98,"Close":px,"Volume":2000.0},index=idx2)
+dly=pd.DataFrame({"Open":px,"High":px,"Low":px,"Close":px,"Volume":2000.0},index=idx2)
+r=W.analyse("CHEAP",wk,dly,wk.assign(Close=np.linspace(100,140,140)),W.CFG)
+assert r is not None and r["liq"]=="very thin" and r["shares"]<=0.05*r["adv_shares"]+1, r and (r["liq"],r["shares"],r["adv_shares"])
+ok("no price/volume floor; thin stocks flagged and position-capped")
+
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize

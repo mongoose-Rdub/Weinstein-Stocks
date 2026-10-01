@@ -41,11 +41,13 @@ of METHOD below is derived from the book, with page references.
 import argparse
 import math
 import sys
+import time
 
 import numpy as np
 import pandas as pd
 
 import stage_vcp_screener as infra
+import universe_fetch as uf
 
 
 # ----------------------------------------------------------------------------
@@ -167,10 +169,15 @@ CFG = {
     "account_size": 300_000,
     "positions": 15,
 
-    # Liquidity: Weinstein gives NO numeric rule. He warns qualitatively about
-    # execution quality (p.65n). This floor exists only so the screen does not
-    # surface names you cannot trade; set to 0 to disable it entirely.
-    "min_dollar_volume": 5_000_000,
+    # The book sets NO minimum price or volume: his own big winners include
+    # Blocker Energy at about $1 and a 3/8 low (p.154-157). Nothing is screened
+    # out for being cheap or quiet. Instead thinly traded stocks are flagged
+    # and handled the way he handles them: a wider buy limit (p.66) and a wide
+    # sell-stop-limit spread (p.180). The thresholds below are ours.
+    "min_dollar_volume": 0,
+    "thin_dollar_volume": 1_000_000,       # average daily dollars: "thin" below this
+    "very_thin_dollar_volume": 250_000,    # ...and "very thin" below this
+    "thin_max_adv_pct": 5.0,               # cap a position at this % of average daily shares
 
     # "try to limit your purchases to those cases where the initial stop isn't
     # greater than 15 percent below your purchase price" (p.184), with
@@ -179,7 +186,7 @@ CFG = {
     "wide_stop_pct": 15.0,
     "range_scan_weeks": 260,
     "ceiling_scan_weeks": 78,    # how far before Stage 2 to look for a range ceiling     # how far back to measure real base length
-    "min_price": 5.0,
+    "min_price": 0.0,
 }
 
 BUY_VERDICTS = {"BREAKOUT - BUY", "CONTINUATION - BUY", "PULLBACK - BUY"}
@@ -656,6 +663,11 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         if daily is not None and len(daily) else price * float(weekly["Volume"].tail(4).mean()) / 5
     if cfg["min_dollar_volume"] and avg_dollar < cfg["min_dollar_volume"]:
         return None
+    adv_shares = float(daily["Volume"].tail(50).mean()) if daily is not None and len(daily) else 0.0
+    liq = ("very thin" if avg_dollar < cfg["very_thin_dollar_volume"]
+           else "thin" if avg_dollar < cfg["thin_dollar_volume"] else "normal")
+    if not np.isfinite(avg_dollar) or avg_dollar <= 0:
+        return None                      # no trading at all: nothing to screen
 
     ma = infra.moving_average(close, cfg["ma_length"], cfg["ma_type"])
     if np.isnan(ma.iloc[-1]):
@@ -823,6 +835,9 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         stop_trail = max(stop_base, book_stop(min(corr, float(ma.iloc[-1])), cfg["stop_tick"]))
 
     dollars = cfg["account_size"] / max(cfg["positions"], 1)
+    if liq != "normal" and price and adv_shares > 0:
+        # a position bigger than a few percent of a day's volume moves the stock
+        dollars = min(dollars, adv_shares * cfg["thin_max_adv_pct"] / 100 * price)
 
     m = {
         "ticker": ticker,
@@ -859,7 +874,10 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "trail_stop_pct": round((stop_trail - price) / price * 100, 1) if stop_trail is not None else None,
         "wide_stop": bool((stop - price) / price * 100 < -cfg["wide_stop_pct"]),
         "shares": int(dollars / price) if price else 0,
-        "avg_dollar_vol_m": round(avg_dollar / 1e6, 1),
+        "avg_dollar_vol_m": round(avg_dollar / 1e6, 3),
+        "adv_dollars": round(avg_dollar, 0),
+        "adv_shares": round(adv_shares, 0),
+        "liq": liq,
     }
     m.update(triple)
     m.update({k2: v for k2, v in rng.items()})
@@ -1018,6 +1036,187 @@ def verdict(m, cfg):
     return "STAGE 2 - HOLD"
 
 
+def explain(m, cfg, mkt=None):
+    """Rule-by-rule checklist for one stock: what passes, what fails, and why.
+    Each check is [name, status, detail, page]; status is pass / fail / warn / na."""
+    mkt = mkt or {}
+    ck = []
+
+    def add(name, status, detail, ref=""):
+        ck.append([name, status, detail, ref])
+
+    def f(v, d=1):
+        return "n/a" if v is None or (isinstance(v, float) and v != v) else f"{v:.{d}f}"
+
+    stage = m.get("stage")
+    sw = m.get("stage_weeks") or 0
+    fresh = sw <= cfg["fresh_weeks"]
+
+    # 1. market
+    if mkt.get("blocked"):
+        add("Market trend", "fail", "S&P 500 or Dow is in Stage 4: no buying (p.139, p.270)", "p.139")
+    else:
+        add("Market trend", "pass", "S&P 500 and Dow are not in Stage 4", "p.139")
+
+    # 2. sector
+    gs, gname = m.get("group_stage"), m.get("group") or "sector"
+    if gs is None:
+        add("Sector", "na", "no sector read for this stock", "p.78")
+    elif gs in (1, 2):
+        add("Sector", "pass", f"{gname} is in Stage {gs}", "p.78")
+    else:
+        add("Sector", "fail", f"{gname} is in Stage {gs}: don't buy a stock in a negative group (p.139)", "p.139")
+
+    # 3. stage
+    if stage == 2:
+        add("Stock stage", "pass", f"Stage 2, week {sw}", "p.34")
+    elif stage == 1:
+        add("Stock stage", "warn", "Stage 1: still basing. Put a buy-stop above the top of the range (p.115)", "p.115")
+    elif stage == 3:
+        add("Stock stage", "fail", "Stage 3 top: never buy here (p.38)", "p.38")
+    elif stage == 4:
+        add("Stock stage", "fail", "Stage 4 decline: never buy (p.39)", "p.39")
+    else:
+        add("Stock stage", "na", "not classified", "")
+
+    # 4. 30-week average
+    px, ma = m.get("price"), m.get("ma30")
+    if px is not None and ma:
+        pa = (px / ma - 1) * 100
+        if px < ma:
+            add("30-week average", "fail", f"price ${px:,.2f} is {abs(pa):.1f}% BELOW the 30-week average ${ma:,.2f} (p.139)", "p.139")
+        elif m.get("ma_state") == "Falling":
+            add("30-week average", "fail", f"average is declining: don't buy even above it (p.139)", "p.139")
+        else:
+            add("30-week average", "pass", f"price {pa:.1f}% above a {str(m.get('ma_state')).lower()} average (${ma:,.2f})", "p.14")
+
+    # 5. base
+    if stage == 2:
+        bw = m.get("base_weeks_before")
+        if m.get("after_advance") or (bw is not None and bw >= cfg["base_min_weeks"]):
+            add("Base behind it", "pass", f"{bw} weeks of basing before this advance" if bw else "restart of an earlier advance", "p.33")
+        else:
+            add("Base behind it", "fail", f"only {bw} weeks of base: V-shaped, don't guess a bottom (p.139)", "p.139")
+
+    # 6. breakout volume
+    if stage == 2:
+        r = m.get("bo_vol_ratio")
+        rtxt = "volume not measured" if r is None or r != r else f"{r:.1f}x the prior 4 weeks"
+        when = "breakout week" if fresh else f"breakout week ({sw} weeks ago)"
+        how = "build-up" if m.get("bo_buildup") else "spike"
+        if m.get("bo_heavy"):
+            add("Breakout volume", "pass",
+                f"{when}: {rtxt} ({how}); needs 2x or a 3-4 week build-up (p.104)", "p.104")
+        else:
+            add("Breakout volume", "fail" if fresh else "warn",
+                f"{when}: {rtxt}; needs 2x or a 3-4 week build-up (p.104)", "p.104")
+
+    # 7. relative strength
+    rs = m.get("rs")
+    if rs is None:
+        add("Relative strength", "na", "not enough history", "p.110")
+    elif rs >= 0:
+        add("Relative strength", "pass", f"Mansfield RS {rs:+.1f}, above zero (p.110)", "p.110")
+    elif m.get("rs_improving") and rs >= -cfg["rs_deep_negative"] and not m.get("rs_below_peak"):
+        add("Relative strength", "warn", f"RS {rs:+.1f} is below zero but improving (p.110)", "p.110")
+    else:
+        why = ("lower than at the base's peak" if m.get("rs_below_peak")
+               else "deep in negative territory" if rs < -cfg["rs_deep_negative"] else "not improving")
+        add("Relative strength", "fail", f"RS {rs:+.1f}, below zero and {why} (p.113)", "p.113")
+
+    # 8. resistance
+    note = m.get("resistance_note") or ""
+    if m.get("resistance_clear", True):
+        add("Overhead resistance", "pass", note or "clear", "p.115")
+    else:
+        add("Overhead resistance", "fail", f"{note}: discard stocks with resistance nearby (p.115)", "p.115")
+
+    # 9. entry point
+    pb, bo = m.get("pct_above_breakout"), m.get("breakout_level")
+    if stage == 2 and pb is not None and bo:
+        if fresh:
+            if pb <= cfg["max_chase_pct"]:
+                add("Entry point", "pass", f"{pb:+.1f}% from the ${bo:,.2f} breakout: close to the entry (p.139)", "p.139")
+            else:
+                add("Entry point", "fail", f"{pb:+.1f}% above the ${bo:,.2f} breakout: too late, wait for a pullback (p.139)", "p.139")
+        elif -cfg["pullback_below"] <= pb <= cfg["pullback_band"]:
+            add("Entry point", "pass", f"in the pullback zone, {pb:+.1f}% from the ${bo:,.2f} breakout (p.34)", "p.34")
+        elif pb > cfg["pullback_band"]:
+            add("Entry point", "warn", f"{pb:+.1f}% above the ${bo:,.2f} breakout: wait for a dip back near it (p.34)", "p.34")
+        else:
+            add("Entry point", "fail", f"{pb:+.1f}% vs the ${bo:,.2f} breakout: slipped back under it", "p.34")
+
+    # 10. pullback volume
+    vp = m.get("vol_vs_peak")
+    if stage == 2 and not fresh and pb is not None and -cfg["pullback_below"] <= pb <= cfg["pullback_band"]:
+        if vp is not None and vp <= cfg["pullback_vol_peak_max"]:
+            add("Pullback volume", "pass", f"{vp:.2f} of the breakout peak (needs <= {cfg['pullback_vol_peak_max']:.2f}): volume dried up (p.105)", "p.105")
+        elif vp is not None:
+            add("Pullback volume", "fail", f"{vp:.2f} of the breakout peak; needs <= {cfg['pullback_vol_peak_max']:.2f}, down over 75% (p.105)", "p.105")
+
+    # 11. stop
+    sp, spp, basis = m.get("stop"), m.get("stop_pct"), m.get("stop_basis")
+    in_zone = (stage == 2 and not fresh and pb is not None
+               and -cfg["pullback_below"] <= pb <= cfg["pullback_band"])
+    if in_zone and m.get("trail_stop") is not None:
+        sp, spp = m["trail_stop"], m["trail_stop_pct"]
+        basis = "trailed stop under the correction low or average (p.194)"
+    if stage == 2 and not fresh and pb is not None and pb > cfg["pullback_band"] \
+            and m.get("verdict") not in BUY_VERDICTS:
+        add("Stop within 15%", "na", "a stop is set when you buy; not meaningful this far above the entry", "p.183")
+    elif stage in (1, 2) and sp is not None and spp is not None:
+        if spp < -cfg["wide_stop_pct"]:
+            add("Stop within 15%", "fail", f"stop ${sp:,.2f} is {spp:.1f}% away ({basis}); the book limits it to 15% (p.184)", "p.184")
+        else:
+            add("Stop within 15%", "pass", f"stop ${sp:,.2f}, {spp:.1f}% from price ({basis})", "p.183")
+
+    # liquidity: no minimum in the book; thin stocks get wider order limits (p.66)
+    liq, adv = m.get("liq"), m.get("adv_dollars")
+    if liq == "normal" and adv:
+        add("Liquidity", "pass", f"averages ${adv/1e6:,.1f}M a day: ordinary order handling", "p.66")
+    elif liq in ("thin", "very thin") and adv is not None:
+        add("Liquidity", "warn", f"{liq}: averages ${adv/1e3:,.0f}K a day. The book stretches the buy limit to half a point for "
+            f"thinly traded stocks (p.66); expect slippage on the stop and keep the position small", "p.66")
+
+    # 12. triple confirmation
+    ts = m.get("triple_score")
+    if stage == 2 and ts is not None and fresh:
+        add("Triple confirmation", "pass" if ts == 3 else "na", f"{int(ts)}/3 of volume, RS turning positive, 40%+ run before breakout (p.150)", "p.150")
+    return ck
+
+
+def headline(bucket, m, checks):
+    fails = [c for c in checks if c[1] == "fail"]
+    names = ", ".join(c[0].lower() for c in fails[:3])
+    if bucket == "ACTIVE BUY":
+        return "Meets every rule. See the entry and stop below."
+    if bucket == "NEAR MISS":
+        return (f"Close. Everything passes except pullback volume ({m.get('vol_vs_peak')} of the breakout peak; "
+                f"the book's example needs 0.25 or less). Watch for volume to dry up.")
+    if bucket == "BUY-STOP WATCH":
+        return "Coiled in a base with an acceptable stop. Not a buy until it breaks out above the top on heavy volume."
+    if bucket == "SKIP - STOP TOO WIDE":
+        return "A good setup, but the protective stop would be more than 15% away. The book says to skip it unless the chart is outstanding."
+    if bucket == "WAIT FOR PULLBACK":
+        return "A good breakout, but price is too far above the entry point. Wait for a pullback toward it."
+    if bucket == "DISCARDED - RESISTANCE":
+        return "Would otherwise qualify, but heavy supply sits just overhead. Re-check if it clears that level."
+    if bucket == "SUSPECT BREAKOUT":
+        return "New Stage 2 without the required volume surge. The book warns these often fail."
+    if bucket == "BLOCKED - SECTOR":
+        return "The stock itself may look fine, but its sector is in Stage 3 or 4. The book says don't buy in a negative group."
+    if bucket == "NO SECTOR DATA":
+        return "The stock may qualify, but its sector could not be determined. The book requires a healthy group (p.78), so it is not listed as a buy."
+    if bucket == "SUSPENDED - MARKET":
+        return "Buying is suspended because the S&P 500 or the Dow is in Stage 4."
+    if fails:
+        return f"Not a candidate right now: {names}."
+    warns = [c for c in checks if c[1] == "warn"]
+    if warns:
+        return f"Not a buy yet: {', '.join(c[0].lower() for c in warns[:2])}. See the checklist."
+    return "Not a candidate right now."
+
+
 def completed_weekly(daily, include_partial=False, today=None):
     """Weekly bars from daily data, dropping a week still in progress.
 
@@ -1091,6 +1290,12 @@ def main():
     p.add_argument("--positions", type=int)
     p.add_argument("--out", default="weinstein_results.csv")
     p.add_argument("--watchlist", default="weinstein_watchlist.txt")
+    p.add_argument("--time-budget", type=float, default=240.0,
+                   help="minutes allowed for downloading prices before the screen runs on "
+                        "whatever was fetched (default 240)")
+    p.add_argument("--sector-budget", type=int, default=600,
+                   help="Yahoo sector lookups per run for stocks outside the S&P tables")
+    p.add_argument("--sector-file", default="data/sectors.json")
     p.add_argument("--no-breadth", action="store_true",
                    help="skip the market-breadth gauges (screens favorable groups only; faster)")
     p.add_argument("--feed", help="dashboard JSON path (default weinstein_feed.json "
@@ -1190,6 +1395,7 @@ def main():
     print(f"Favorable groups (Stage 1 or 2): {', '.join(sorted(good))}\n",
           file=sys.stderr)
 
+    umeta = {}
     # ---- 3. universe, restricted to favorable groups ----
     if args.tickers:
         tickers = [t.strip().upper() for t in args.tickers.split(",")]
@@ -1200,7 +1406,12 @@ def main():
     elif args.universe == "sp1500":
         tickers, smap = infra.load_sp1500()
     elif args.universe == "all":
-        tickers, smap = infra.load_all_us_listed(), {}
+        # the whole listed market, as Weinstein's chart books were (p.46)
+        tickers, smap, umeta = uf.build_universe(
+            min_price=cfg["min_price"], prefilter_dollar_vol=0, sector_path=args.sector_file,
+            sector_budget=args.sector_budget,
+            deadline=time.time() + 600)
+        print(f"Universe: {umeta}", file=sys.stderr)
     else:
         ns = argparse.Namespace(tickers=None, file=None, universe="sp500",
                                 sectors=None)
@@ -1221,33 +1432,20 @@ def main():
     want = list(tickers)
     if smap and not args.no_breadth and not (args.tickers or args.file):
         want = universe_all            # breadth needs the whole universe
-    have = [t for t in want if infra.is_cached(t)]
-    missing = [t for t in want if t not in set(have)]
-    print(f"Cache: {len(have)}/{len(want)}", file=sys.stderr)
+    fstats = uf.ensure_prices(want, time_budget_min=args.time_budget)
+    print(f"Price fetch: {fstats}", file=sys.stderr)
 
-    queue = list(missing)
-    for rnd in range(max(1, args.rounds)):
-        if not queue:
-            break
-        if rnd:
-            print(f"  round {rnd+1}: pausing 180s", file=sys.stderr)
-            import time as _t
-            _t.sleep(180)
-        got = 0
-        while queue and got < args.max_new:
-            batch = queue[:args.chunk]
-            pr = infra.fetch_prices(batch, quiet=True)
-            queue = queue[len(batch):]
-            got += len(batch)
-            print(f"  fetched {len(pr)}/{len(batch)}   remaining {len(queue)}",
-                  file=sys.stderr)
-            if len(pr) / max(len(batch), 1) < 0.7:
-                print("  throttled -- ending round", file=sys.stderr)
-                break
-
-    for t in tickers:
-        daily = infra.load_cached(t)
+    # Every stock in the universe is analysed so the dashboard's ticker lookup
+    # can explain stocks in unfavorable sectors too; the buy tables use only
+    # the favorable-group rows (group_ok).
+    scan = universe_all if (smap and not (args.tickers or args.file)) else tickers
+    stale_skipped = 0
+    for t in scan:
+        daily = uf.load_any(t)
         if daily is None or daily.empty:
+            continue
+        if (uf.last_friday() - daily.index[-1].date()).days > 7 and not args.include_partial:
+            stale_skipped += 1        # data too old to trust: not screened
             continue
         try:
             r = analyse(t, completed_weekly(daily, args.include_partial),
@@ -1255,6 +1453,7 @@ def main():
                         group_stage=groups.get(smap.get(t)))
             if r:
                 r["group"] = smap.get(t, "")
+                r["group_ok"] = bool(args.all or not smap or smap.get(t) in good)
                 rows.append(r)
         except Exception as exc:
             print(f"  skip {t}: {exc}", file=sys.stderr)
@@ -1267,7 +1466,7 @@ def main():
         try:
             cl = {}
             for t in universe_all:
-                dd = infra.load_cached(t)
+                dd = uf.load_any(t)
                 if dd is not None and not dd.empty:
                     cl[t] = dd["Close"].tail(520)
             closes = pd.DataFrame(cl)
@@ -1276,11 +1475,12 @@ def main():
         except Exception as exc:
             print(f"  breadth skipped: {exc}", file=sys.stderr)
 
-    df = pd.DataFrame(rows)
+    df_all = pd.DataFrame(rows)
+    df = df_all[df_all["group_ok"]].reset_index(drop=True)
     out_path = args.out
     if (args.tickers or args.file) and args.out == "weinstein_results.csv":
         out_path = "weinstein_check.csv"   # spot checks never overwrite the full run
-    df.to_csv(out_path, index=False)
+    df_all.to_csv(out_path, index=False)
 
     if args.detail or args.tickers:
         print_detail(df)
@@ -1347,7 +1547,7 @@ def main():
             return bool(v)
         return v
 
-    def _entry(r, kind):
+    def _entry_zone(r, kind):
         """entry zone per the book: buy the breakout (p.150), don't chase (p.139)."""
         chase = 1 + cfg["max_chase_pct"] / 100
         if kind == "pullback":
@@ -1387,7 +1587,7 @@ def main():
                 "rs", "resistance_note", "resistance_level", "resistance_pct",
                 "resistance_age_wks", "resistance_weeks_over", "pct_to_trigger",
                 "range_weeks", "range_width_pct", "pct_above_breakout", "breakout_level",
-                "shares", "avg_dollar_vol_m", "stop_basis", "bo_vol_ratio", "bo_buildup",
+                "shares", "avg_dollar_vol_m", "adv_dollars", "liq", "stop_basis", "bo_vol_ratio", "bo_buildup",
                 "triple_vol", "triple_rs", "triple_adv", "triple_score", "rs_at_peak",
                 "base_weeks_before", "range_bottom", "group_stage")}
             d.update(lr.get(r["ticker"], {}))
@@ -1405,12 +1605,51 @@ def main():
             else:
                 d["stop"], d["risk_pct"] = _clean(r["stop"]), _clean(r["stop_pct"])
             try:
-                lo, hi = _entry(r, kind)
+                lo, hi = _entry_zone(r, kind)
                 d["entry_low"], d["entry_high"] = _clean(lo), _clean(hi)
             except Exception:
                 d["entry_low"] = d["entry_high"] = None
             out.append(d)
         return out
+
+    # ---- ticker lookup: every screened stock, with a rule-by-rule explanation ----
+    _bucket = {}
+    for _frame, _lab in ((suspects, "SUSPECT BREAKOUT"), (disc, "DISCARDED - RESISTANCE"),
+                         (near, "NEAR MISS"), (waits, "WAIT FOR PULLBACK"),
+                         (watch_skip, "SKIP - STOP TOO WIDE"), (watch, "BUY-STOP WATCH"),
+                         (skips, "SKIP - STOP TOO WIDE"), (buys, "ACTIVE BUY")):
+        for _t in _frame["ticker"]:
+            _bucket[_t] = _lab
+    _mkt = {"blocked": bool(blocked), "sp": mkt_stage, "dow": dow_stage}
+    _look = {}
+    for _, _r in df_all.iterrows():
+        _m = {k: _clean(v) for k, v in _r.items()}
+        _b = _bucket.get(_r["ticker"])
+        if _b is None:
+            would = (_r["verdict_no_res"] in (BUY_VERDICTS | {WAIT_VERDICT, "BUY-STOP WATCH"}))
+            if not _r["group_ok"] and would:
+                _b = "NO SECTOR DATA" if not _r["group"] else "BLOCKED - SECTOR"
+            else:
+                _b = "NOT A CANDIDATE"
+        if blocked and _b in ("ACTIVE BUY", "NEAR MISS", "BUY-STOP WATCH", "WAIT FOR PULLBACK"):
+            _b = "SUSPENDED - MARKET"
+        _ck = explain(_m, cfg, _mkt)
+        _entry = None
+        if _b in ("ACTIVE BUY", "NEAR MISS", "BUY-STOP WATCH", "SKIP - STOP TOO WIDE",
+                  "WAIT FOR PULLBACK", "DISCARDED - RESISTANCE"):
+            _k = ("pullback" if _r["verdict"] == "PULLBACK - BUY" or _b == "NEAR MISS"
+                  else "base" if _b == "BUY-STOP WATCH" else "breakout")
+            try:
+                _lo, _hi = _entry_zone(_r, _k)
+                _entry = [_clean(_lo), _clean(_hi)]
+            except Exception:
+                _entry = None
+        _look[_r["ticker"]] = {
+            "p": _m["price"], "g": _m.get("group") or "", "b": _b,
+            "h": headline(_b, _m, _ck), "c": _ck, "e": _entry,
+            "s": _clean(_r["trail_stop"] if _b == "NEAR MISS" else _r["stop"]),
+            "r": _clean(_r["trail_stop_pct"] if _b == "NEAR MISS" else _r["stop_pct"]),
+            "v": _r["verdict"]}
 
     _feed = {
         "generated": _dt.datetime.now().isoformat(timespec="minutes"),
@@ -1434,10 +1673,17 @@ def main():
         "waits": _pack(waits, "wait"), "near": _pack(near, "near"),
         "disc": _pack(disc, "disc"), "suspects": _pack(suspects, "suspect"),
         "no_base": int((df["verdict"] == NO_BASE_VERDICT).sum()),
+        "coverage": {"universe": len(universe_all), "analysed": int(len(df_all)),
+                     "stale_skipped": stale_skipped, **{k: v for k, v in fstats.items()},
+                     **{("u_" + k): v for k, v in umeta.items()}},
     }
+    _lookup_doc = {"l": _look, "u": sorted(set(universe_all))}
     if args.feed or not (args.tickers or args.file):
-        with open(args.feed or "weinstein_feed.json", "w") as _f:
+        _fp = args.feed or "weinstein_feed.json"
+        with open(_fp, "w") as _f:
             _json.dump(_feed, _f, indent=1)
+        with open(_fp.replace(".json", "") + "_lookup.json", "w") as _f:
+            _json.dump(_lookup_doc, _f, separators=(",", ":"))
 
     n_suppressed = 0
     if blocked:

@@ -6,9 +6,11 @@ self-contained, shareable HTML dashboard.
 """
 import html
 import json
+import os
 import sys
 from datetime import datetime
 
+EMBED_LIMIT = 1_500_000
 FEED = sys.argv[1] if len(sys.argv) > 1 else "weinstein_feed.json"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "weinstein_dashboard.html"
 e = html.escape
@@ -46,6 +48,8 @@ def badges(r):
         b.append(f"<span class='bdg dim'>{sc}/3</span>")
     if r.get("lr_virgin") is True:
         b.append("<span class='bdg gold'>A+ 10-YR HIGH</span>")
+    if r.get("liq") in ("thin", "very thin"):
+        b.append(f"<span class='bdg thin'>{'VERY THIN' if r['liq'] == 'very thin' else 'THIN'}</span>")
     return "".join(b)
 
 
@@ -79,15 +83,36 @@ def triple_line(r):
 
 
 def ticket(r, rules):
-    """The book's order: buy-stop just above the breakout, with a limit, GTC (p.66).
-    The book's example is a $12 stock: stop 1/8 over, limit 1/4 over (1/2 if thin).
-    Scaled here to the same percentages so it works at any price."""
+    """The book's orders. Buy: a buy-stop just above the breakout with a limit,
+    GTC (p.66). The example is a $12 stock: stop 1/8 over, limit 1/4 over, or
+    1/2 over "unless it trades very thinly". Sell: a GTC sell-stop the moment
+    you buy; a straight stop on the NYSE, a stop-limit with a wide spread where
+    only that is allowed (p.180). Scaled to the same percentages so it works
+    at any price."""
     lv = r["entry_low"]
     if lv is None:
         return ""
+    thin = r.get("liq") in ("thin", "very thin")
     stop_px, lim_px, thin_px = lv * 1.0104, lv * 1.0208, lv * 1.0417
-    return (f"Order: BUY-STOP {money(stop_px)}, LIMIT {money(lim_px)} "
-            f"({money(thin_px)} if thinly traded), GTC.")
+    if thin:
+        buy = (f"Order: BUY-STOP {money(stop_px)}, LIMIT {money(thin_px)} (the wider limit the book "
+               f"uses for thinly traded stocks, p.66), GTC.")
+    else:
+        buy = (f"Order: BUY-STOP {money(stop_px)}, LIMIT {money(lim_px)} "
+               f"({money(thin_px)} if it trades thinly), GTC.")
+    return buy
+
+
+def exit_line(r):
+    sp = r.get("stop")
+    if sp is None or _bad(sp):
+        return ""
+    wide = sp * 0.97
+    txt = (f"Exit: enter a GTC SELL-STOP at {money(sp)} the day you buy. A straight stop on the NYSE; "
+           f"if only a stop-limit is allowed, use a wide spread, e.g. stop {money(sp)}, limit {money(wide)} (p.180).")
+    if r.get("liq") in ("thin", "very thin"):
+        txt += " Thin stock: the stop can fill well below its price, so keep the position small."
+    return txt
 
 
 # ---------------------------------------------------------------- cards
@@ -128,9 +153,11 @@ def active_card(r, rules):
       <p class="how">{how}</p>
       <p class="how">Stop goes in as a sell-stop the day you buy ({e(r.get('stop_basis') or 'base floor')},
         one-eighth under a round number). Raise it only as the stock builds new higher lows.</p>
+      <p class="how sm">{e(exit_line(r))}</p>
       <p class="how sm">{e(long_range_line(r))} {e(triple_line(r))}</p>
-      <p class="size">Example size: {int(r['shares'])} sh ≈ ${per:,.0f}
-        (1/{rules['positions']} of ${rules['account_size']:,.0f}) · resistance: {e(r['resistance_note'])}</p>
+      <p class="size">Example size: {int(r['shares'])} sh ≈ ${r['shares'] * r['price']:,.0f}
+        (1/{rules['positions']} of ${rules['account_size']:,.0f}{', capped at ~5% of average daily volume' if r.get('liq') in ('thin', 'very thin') else ''})
+        · avg volume ${(r.get('adv_dollars') or 0) / 1e6:,.2f}M/day · resistance: {e(r['resistance_note'])}</p>
     </div>"""
 
 
@@ -259,6 +286,12 @@ def build(d):
              ("s", "Skip: stop too wide", len(d["skip_stop"]) + len(d["watch_skip"])),
              ("d", "Discarded: resistance", len(d["disc"]))]
     tile_html = "".join(f"<div class='tile t{c}'><b>{n}</b><span>{t}</span></div>" for c, t, n in tiles)
+    cv = d.get("coverage") or {}
+    cov_txt = ""
+    if cv.get("universe"):
+        cov_txt = f" · {cv.get('analysed', 0):,} of {cv['universe']:,} US stocks analysed"
+        if cv.get("ended_early"):
+            cov_txt += " (price download ended early; partial coverage)"
     gen = datetime.fromisoformat(d["generated"]).strftime("%b %d, %Y %I:%M %p")
 
     hid = "<div class='note'>Hidden: the market is in Stage 4.</div>" if blocked else ""
@@ -284,12 +317,30 @@ def build(d):
                 d["suspects"], susp_cols),
     ]
 
+    lookup_html = ""
+    lk = d.get("_lookup")
+    if lk:
+        raw = json.dumps(lk, separators=(",", ":"))
+        embed = len(raw) <= EMBED_LIMIT
+        safe = raw.replace("</", "<\\/")
+        data_tag = ('<script id="lkdata" type="application/json">' + safe + '</script>') if embed else ""
+        n = len(lk.get("u", []))
+        lookup_html = f"""
+<section class="lookup">
+  <h2>Check a ticker</h2>
+  <p>Type any symbol from the {n:,} US stocks screened to see how it scores on each rule, as of the last Friday close.</p>
+  <form id="lkform" autocomplete="off"><input id="lkin" placeholder="e.g. AAPL" maxlength="8" aria-label="Ticker symbol"><button type="submit">Check</button></form>
+  <div id="lkout"></div>
+</section>
+{data_tag}
+<script>{LOOKUP_JS}</script>"""
+
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Weinstein Stage 2 Dashboard</title><style>{CSS}</style></head><body>
 <header>
   <div><h1>Stage 2 Buy Dashboard</h1>
-    <p>Stan Weinstein method · weekly charts · {d['screened']} stocks screened in favorable groups</p></div>
+    <p>Stan Weinstein method · weekly charts · {d['screened']:,} stocks in favorable sectors screened{cov_txt}</p></div>
   <div class="meta"><div>Week ending <b>{d['last_bar']}</b></div><div>Updated {gen}</div></div>
 </header>
 <div class="mkt {mcls}"><b>S&amp;P 500: {mtxt}</b>
@@ -297,6 +348,7 @@ def build(d):
 <div class="groups"><small>SECTORS</small>{groups}</div>
 {gauge_html}
 <div class="tiles">{tile_html}</div>
+{lookup_html}
 {active_panel(d)}
 {hid}
 <main>{''.join(sections)}</main>
@@ -311,6 +363,59 @@ def build(d):
   Rules follow <i>Secrets for Profiting in Bull and Bear Markets</i>; thresholds the book does not specify are the author's choices.</p>
 </footer></body></html>"""
 
+
+LOOKUP_JS = r"""
+(function(){
+var L=null,U=null,loading=false,pending=null;
+function ready(D){L=D.l;U=new Set(D.u);if(pending!==null){var p=pending;pending=null;show(p);}}
+var tag=document.getElementById('lkdata');
+if(tag){ready(JSON.parse(tag.textContent));}
+else{loading=true;fetch('lookup.json',{cache:'no-cache'}).then(function(r){return r.json();}).then(ready)
+  .catch(function(){var o=document.getElementById('lkout');o.textContent="The lookup data could not be loaded.";});}
+var COL={"ACTIVE BUY":"#1f9d55","NEAR MISS":"#e6a100","BUY-STOP WATCH":"#2f7fd6","WAIT FOR PULLBACK":"#8a5bd0",
+"SKIP - STOP TOO WIDE":"#d9582b","DISCARDED - RESISTANCE":"#8b94a6","SUSPECT BREAKOUT":"#5b6b85",
+"BLOCKED - SECTOR":"#c0392b","SUSPENDED - MARKET":"#c0392b","NOT A CANDIDATE":"#6b7689"};
+var ICON={pass:"\u2713",fail:"\u2717",warn:"!",na:"\u2013"};
+function el(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!==undefined)n.textContent=x;return n;}
+function $(v){return v==null?"\u2013":"$"+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function show(t){
+  var out=document.getElementById('lkout');out.textContent="";
+  if(L===null){pending=t;out.textContent="Loading the data...";return;}
+  t=(t||"").trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,"");
+  if(!t)return;
+  var r=L[t];
+  if(!r){
+    var m=el('div','lkmsg');
+    m.textContent=U.has(t)?t+" is in the universe but was not screened: it has under a year of price history, or its price data was not up to date."
+      :t+" is not in the list of US stocks this dashboard screens. It can be checked from the command line with the screener's --tickers option.";
+    out.appendChild(m);return;}
+  var card=el('div','lkcard');card.style.borderColor=COL[r.b]||"#999";
+  var top=el('div','lktop');
+  top.appendChild(el('b','lktk',t));
+  top.appendChild(el('span','lkpx',$(r.p)+(r.g?"  \u00b7  "+r.g:"")));
+  var chip=el('span','lkchip',r.b);chip.style.background=COL[r.b]||"#999";top.appendChild(chip);
+  card.appendChild(top);
+  card.appendChild(el('p','lkhead',r.h));
+  if(r.e&&r.s!=null){
+    var lv=el('div','lklv');
+    lv.appendChild(el('span','','Entry zone '+$(r.e[0])+' \u2013 '+$(r.e[1])));
+    lv.appendChild(el('span','','Stop '+$(r.s)+(r.r!=null?' ('+r.r.toFixed(1)+'%)':'')));
+    card.appendChild(lv);}
+  var ul=el('ul','lkcks');
+  r.c.forEach(function(c){
+    var li=el('li','ck '+c[1]);
+    li.appendChild(el('i','',ICON[c[1]]||""));
+    var b=el('b','',c[0]);li.appendChild(b);
+    li.appendChild(el('span','',c[2]));
+    ul.appendChild(li);});
+  card.appendChild(ul);
+  card.appendChild(el('p','lkfoot','Mechanical screen as of the last Friday close, not advice. Verify on the chart.'));
+  out.appendChild(card);
+}
+document.getElementById('lkform').addEventListener('submit',function(ev){ev.preventDefault();show(document.getElementById('lkin').value);});
+document.getElementById('lkin').addEventListener('change',function(){show(this.value);});
+})();
+"""
 
 CSS = """
 :root{color-scheme:light}
@@ -371,7 +476,7 @@ small{color:#8a93a5}.bad{color:#c0392b}
 footer{max-width:1040px;margin:26px auto 0;padding:0 24px;color:#5d6778;font-size:12.5px}
 footer h3{margin:0 0 6px;font-size:14px;color:#1c2333}.disc{font-size:11.5px;color:#8a93a5}
 .bdgs{margin:4px 0 0}.bdg{display:inline-block;border-radius:5px;padding:1px 7px;margin:0 4px 2px 0;font-size:10px;font-weight:800;letter-spacing:.6px}
-.bdg.gold{background:#ffe9a8;color:#7a5300}.bdg.dim{background:#e8eaef;color:#6b7689}
+.bdg.gold{background:#ffe9a8;color:#7a5300}.bdg.dim{background:#e8eaef;color:#6b7689}.bdg.thin{background:#fde4e1;color:#a52a1d}
 td .bdg{margin-left:6px;vertical-align:middle}
 .how.sm{font-size:12px;color:#5d6778}
 .gauges{margin:12px 32px 0;background:#fff;border-radius:10px;padding:8px 14px;box-shadow:0 1px 3px rgba(20,30,60,.08);font-size:13px}
@@ -380,11 +485,34 @@ td .bdg{margin-left:6px;vertical-align:middle}
 .gauges li.pos{border-color:#1f9d55}.gauges li.neg{border-color:#c0392b}.gauges li span{color:#5d6778;text-align:right}
 .gnote{margin:6px 0 2px;font-size:11.5px;color:#8a93a5}
 .caution{margin:10px 32px 0;background:#fff3d6;border-left:5px solid #e6a100;border-radius:8px;padding:10px 14px;font-size:13px;color:#7a5300}
+.lookup{max-width:1040px;margin:18px auto 0;background:#fff;border-radius:14px;padding:16px 22px;box-shadow:0 1px 3px rgba(20,30,60,.08)}
+.lookup h2{margin:0 0 2px;font-size:17px}.lookup p{margin:0 0 10px;color:#5d6778;font-size:13px}
+#lkform{display:flex;gap:8px}#lkin{flex:1;max-width:260px;padding:9px 12px;border:2px solid #cfd6e3;border-radius:8px;font-size:16px;text-transform:uppercase}
+#lkin:focus{outline:none;border-color:#2f7fd6}
+#lkform button{padding:9px 18px;border:0;border-radius:8px;background:#1d4f7a;color:#fff;font-weight:700;cursor:pointer}
+.lkmsg{margin-top:12px;padding:10px 14px;background:#f3f5f9;border-radius:8px;color:#5d6778;font-size:13px}
+.lkcard{margin-top:14px;border:3px solid #999;border-radius:12px;padding:14px 16px}
+.lktop{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.lktk{font-size:26px}.lkpx{color:#5d6778}
+.lkchip{margin-left:auto;color:#fff;font-weight:800;font-size:12px;letter-spacing:.8px;padding:4px 10px;border-radius:6px}
+.lkhead{margin:8px 0;font-size:14px}.lklv{display:flex;gap:18px;flex-wrap:wrap;font-weight:700;margin:6px 0 10px}
+.lkcks{list-style:none;margin:6px 0 0;padding:0}.ck{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid #edf0f5;font-size:13px}
+.ck i{font-style:normal;font-weight:800;width:18px;text-align:center;flex:none}.ck b{width:150px;flex:none}.ck span{color:#3b4456}
+.ck.pass i{color:#1f9d55}.ck.fail i{color:#c0392b}.ck.warn i{color:#d19200}.ck.na i{color:#9aa3b4}
+.ck.fail b{color:#a52a1d}.lkfoot{margin:10px 0 0;font-size:11.5px;color:#8a93a5}
+@media(max-width:640px){.ck{flex-wrap:wrap}.ck b{width:auto}}
 @media(max-width:640px){header,.mkt,.groups,.tiles{padding-left:16px;padding-right:16px}.levels{grid-template-columns:1fr}}
 """
 
 if __name__ == "__main__":
     data = load()
+    lkp = FEED.replace(".json", "") + "_lookup.json"
+    if os.path.exists(lkp):
+        with open(lkp) as f:
+            data["_lookup"] = json.load(f)
+        raw = json.dumps(data["_lookup"], separators=(",", ":"))
+        if len(raw) > EMBED_LIMIT:                  # too big to embed: ship it beside the page
+            with open(os.path.join(os.path.dirname(os.path.abspath(OUT)), "lookup.json"), "w") as f:
+                f.write(raw)
     with open(OUT, "w") as f:
         f.write(build(data))
     print(f"wrote {OUT}  ({len(data['active'])} active, {len(data['near'])} near misses)")
