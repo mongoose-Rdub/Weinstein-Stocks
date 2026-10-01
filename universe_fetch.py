@@ -1,7 +1,7 @@
 """Universe building and price fetching for the full-US-market screen.
 
 Weinstein worked from chart books covering thousands of NYSE, Amex and
-over-the-counter stocks (p.46), not a 1,500-name index. This module builds that
+over-the-counter stocks (p.31), not a 1,500-name index. This module builds that
 wider universe and fetches its prices without tripping Yahoo's rate limiter:
 
   * Weekly refresh is INCREMENTAL. A cached stock only needs the last few

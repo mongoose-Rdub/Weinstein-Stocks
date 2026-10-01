@@ -13,6 +13,8 @@ from datetime import datetime
 EMBED_LIMIT = 1_500_000
 REPO = os.environ.get("GITHUB_REPOSITORY") or "mongoose-Rdub/Weinstein-Stocks"
 BRANCH = os.environ.get("POSITIONS_BRANCH") or "main"
+BOOK_URL = (os.environ.get("BOOK_PDF_URL") or "").strip()      # optional link to a PDF you may open
+BOOK_OFFSET = int(os.environ.get("BOOK_PDF_OFFSET") or 10)    # PDF page = printed page + this
 FEED = sys.argv[1] if len(sys.argv) > 1 else "weinstein_feed.json"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "weinstein_dashboard.html"
 e = html.escape
@@ -135,7 +137,7 @@ def profit_plan(r):
     ts = r.get("trader_stop")
     if not _bad(ts):
         tr.append(f"stop {money(ts)} ({pct(r.get('trader_stop_pct'))}), a closer stop than the investor's: "
-                  f"strong breakouts rarely fall more than 4-6% below the breakout (p.194)")
+                  f"strong breakouts rarely fall more than 4-6% below the breakout (p.194-195)")
     if not _bad(r.get("swing_target")):
         tr.append(f"swing-rule target <b>{money(r['swing_target'])}</b> ({pct(r.get('swing_gain_pct'))}): "
                   f"old peak {money(r.get('swing_peak'))} minus the low {money(r.get('swing_low'))}, "
@@ -200,7 +202,7 @@ def active_panel(d):
     if d["market_blocked"]:
         body = ("<div class='none stop4'><h3>Buying suspended</h3>"
                 "<p>The S&amp;P 500 is in Stage 4. The book says don't buy into a bearish "
-                "market (p.139). Candidates are hidden until the market improves.</p></div>")
+                "market (p.129). Candidates are hidden until the market improves.</p></div>")
     elif not a:
         body = ("<div class='none'><h3>No active buys this week</h3>"
                 "<p>Nothing meets every rule. Patience is a position. "
@@ -346,13 +348,13 @@ def build(d):
                 "Coiled in a base with an acceptable stop. Place a buy-stop above the top; it is not a buy until it triggers on volume.",
                 [] if blocked else d["watch"], watch_cols),
         section("wait", "Wait for Pullback",
-                f"Good breakout, more than {d['rules']['max_chase_pct']:.0f}% above entry. Don't chase (p.139).",
+                f"Good breakout, more than {d['rules']['max_chase_pct']:.0f}% above entry. Don't chase (p.129).",
                 [] if blocked else d["waits"], wait_cols),
         section("skip", "Skip – Stop Too Wide",
                 f"Good setup, but the stop is more than {d['rules']['wide_stop_pct']:.0f}% away (p.184). Occasional exceptions only for outstanding charts.",
                 [] if blocked else d["skip_stop"] + d["watch_skip"], skip_cols),
         section("disc", "Discarded – Overhead Resistance",
-                f"Would otherwise qualify, but supply sits within {d['rules']['resistance_near_pct']:.0f}% overhead (p.115, p.139). Re-check if price clears the level.",
+                f"Would otherwise qualify, but supply sits within {d['rules']['resistance_near_pct']:.0f}% overhead (p.115, p.129). Re-check if price clears the level.",
                 [] if blocked else d["disc"], disc_cols),
         section("susp", "Suspect Breakouts",
                 "New Stage 2 without the required volume surge. If owned, sell on the first rally (p.116).",
@@ -404,7 +406,8 @@ def build(d):
   <p class="disc">For education only. This is not investment advice and not a recommendation to buy or sell any security.
   Signals are mechanical and can be wrong; verify on the chart and size risk yourself. Data: Yahoo Finance, Friday weekly closes.
   Rules follow <i>Secrets for Profiting in Bull and Bear Markets</i>; thresholds the book does not specify are the author's choices.</p>
-</footer></body></html>"""
+</footer>
+<div id="pgpop" hidden></div><script>{PAGE_JS}</script></body></html>"""
 
 
 POS_SECTION = """
@@ -504,6 +507,348 @@ document.getElementById('posform').addEventListener('submit',function(ev){
 })();
 </script>"""
 POS_SECTION = POS_SECTION.replace("__REPO__", REPO).replace("__BR__", BRANCH)
+
+
+RULE_NOTES = {
+ "13": [
+  "Resistance",
+  "A price zone where a rally tends to stall and turn back. The more often and the longer a zone was tested, the more meaningful it is when price finally clears it."
+ ],
+ "14": [
+  "Below the average",
+  "A stock trading under its 30-week average should not be considered for purchase, especially when that average is falling."
+ ],
+ "25": [
+  "Simple versus weighted",
+  "Charting services often plot a weighted average. The book's own method is a plain 30-week average, which is what this dashboard uses."
+ ],
+ "31": [
+  "Why weekly stages",
+  "With the stage method you can flip through any chart book and quickly rule out most stocks."
+ ],
+ "33": [
+  "Bases take time",
+  "A base forms over months, sometimes years. A stage 2 advance should follow a real sideways base, not a sudden spike."
+ ],
+ "34": [
+  "Second chance",
+  "After a breakout, price often pulls back toward the breakout level. That dip is a lower-risk second chance to buy."
+ ],
+ "35": [
+  "Overextended",
+  "Late in stage 2 the stock sits far above its support and average. It is still a hold, but no longer a buy."
+ ],
+ "36": [
+  "Stage 3 top",
+  "A stalling, choppy advance with a flattening average is a stage 3 top. Traders get out; investors sell half."
+ ],
+ "36-37": [
+  "Stage 3 top",
+  "Once a stage 3 top forms, traders sell. Investors sell half and protect the rest with a stop under the new support."
+ ],
+ "38": [
+  "Stage 3",
+  "Never buy a stock in stage 3: the reward-to-risk is stacked against you."
+ ],
+ "39": [
+  "Stage 4",
+  "Never buy or hold a stage 4 stock. Declines tend to be fast and deep."
+ ],
+ "59": [
+  "Half and half",
+  "Investors buy half at the breakout and half on the pullback. Traders buy the whole position at the breakout."
+ ],
+ "61": [
+  "Continuation buy",
+  "A stock that already advanced pulls back near its average, consolidates, then breaks out again. That second breakout is a continuation buy."
+ ],
+ "61-62": [
+  "Continuation buy",
+  "A stock that already advanced pulls back near its average, consolidates, then breaks out again above that area."
+ ],
+ "61-63": [
+  "Continuation buys",
+  "Breakouts out of a fresh consolidation after a first advance. They suit traders and later stages of a bull market."
+ ],
+ "62": [
+  "Pullbacks are common",
+  "Roughly 80% of initial breakouts are followed by a pullback to near the breakout, so waiting is usually rewarded. A few strong ones never look back."
+ ],
+ "63": [
+  "Mix of buys",
+  "Rule of thumb: investors do about 75-80% of their buying early in stage 2 and the rest from continuation moves."
+ ],
+ "64": [
+  "Buy-stop",
+  "Place a buy-stop just above the top of the base so you are filled only if it really breaks out, even when you are not watching."
+ ],
+ "66": [
+  "Order type",
+  "Use a good-till-canceled buy-stop with a limit a little above it. Allow a wider limit for thinly traded stocks."
+ ],
+ "75": [
+  "Forest to trees",
+  "Work from the whole market down to the sector, then to the individual stock."
+ ],
+ "78": [
+  "The sector",
+  "Concentrate on the groups with the best technical picture. A strong group helps; a weak one hurts."
+ ],
+ "98": [
+  "Overhead supply",
+  "Look at the next resistance above a breakout. Stocks with little supply overhead are the A+ candidates."
+ ],
+ "99": [
+  "10-year view",
+  "If a stock has not traded at higher prices in ten years, there is no overhead supply at all: an A+ situation."
+ ],
+ "100": [
+  "Heavy supply",
+  "Heavy supply is a price area where the stock spent a lot of time or was turned back again and again."
+ ],
+ "104": [
+  "Breakout volume",
+  "Volume on the breakout should be at least about double the recent weekly average, or show a 3-4 week build-up of double plus an increase on the breakout week."
+ ],
+ "105": [
+  "Pullback volume",
+  "On the pullback, volume should shrink sharply (the book's example fell over 75% from its peak) before you buy the second half."
+ ],
+ "110": [
+  "Relative strength",
+  "Relative strength compares the stock with the market. Above the zero line is a long-term positive, below is a negative. Never buy a stock lagging its own price action."
+ ],
+ "110-113": [
+  "Relative strength",
+  "Positive and improving relative strength confirms a breakout. Weak or falling relative strength is a reason to pass."
+ ],
+ "111": [
+  "RS before the breakout",
+  "Relative strength rising for about 90 days before the breakout, then crossing above zero, is a strong confirmation."
+ ],
+ "113": [
+  "Weak RS",
+  "A relative-strength line below zero, or below where it stood at the base's peak, is a red flag. It needs to show real strength."
+ ],
+ "115": [
+  "Buying checklist",
+  "Check the market, find the best groups, list stocks in bases, discard nearby resistance, check relative strength, place buy-stops for half, buy the rest on a quiet pullback."
+ ],
+ "116": [
+  "Weak breakout",
+  "If breakout volume is not strong enough, sell on the first rally. If the stock falls back under the breakout point, get out."
+ ],
+ "119": [
+  "Old resistance",
+  "Resistance that is close to two years old is much less potent."
+ ],
+ "120": [
+  "Old resistance",
+  "Resistance that is close to two years old is much less potent."
+ ],
+ "129": [
+  "The don'ts",
+  "Don't buy in a bearish market, in a negative group, below a falling 30-week average, too late in an advance, or on poor volume or relative strength."
+ ],
+ "134": [
+  "Clear sailing",
+  "With no resistance overhead, nothing slows the advance."
+ ],
+ "138": [
+  "Diversify",
+  "Spread money across stocks and groups in roughly equal amounts: a handful for small accounts, up to 10-20 for larger ones."
+ ],
+ "150": [
+  "Triple confirmation",
+  "The biggest winners show breakout volume well over double normal and staying heavy, plus relative strength moving to clearly positive."
+ ],
+ "150-152": [
+  "Triple confirmation",
+  "Heavy volume with follow-through, relative strength turning decisively positive, and a large prior advance mark the exceptional winners."
+ ],
+ "154": [
+  "Three-way winner",
+  "Winners often show volume near three times normal that stays heavy, with relative strength turning strongly positive."
+ ],
+ "154-157": [
+  "Exceptional winners",
+  "When volume, relative strength and the size of the move all line up, the stock deserves a bigger position."
+ ],
+ "157": [
+  "Invest heavily",
+  "When all three confirmations line up, invest more heavily than usual."
+ ],
+ "164": [
+  "Selling",
+  "The aim is to stop giving back gains and to stop selling winners too soon."
+ ],
+ "164-213": [
+  "Selling chapter",
+  "How to protect profits and cut losses: trailing stops for investors, tighter stops, trendlines and the swing rule for traders."
+ ],
+ "165": [
+  "Don't sell on feel",
+  "Don't sell just because a stock feels high. Selling too early is as costly as holding too long."
+ ],
+ "176": [
+  "Sell at once",
+  "When a stock shows trouble, sell. Don't wait for a rally to recover a point or two."
+ ],
+ "180": [
+  "Sell-stop orders",
+  "Use a straight sell-stop on NYSE stocks. Where only stop-limit orders are allowed, use a wide spread between the two prices."
+ ],
+ "183": [
+  "Initial stop",
+  "Put the first stop just under the significant support floor, below a round number or half, and plan it before you buy."
+ ],
+ "184": [
+  "Stop and trailing",
+  "Limit buys to setups whose initial stop is within about 15% of the price. After the first 8-10% correction, raise the stop once the stock recovers."
+ ],
+ "184-186": [
+  "Trailing stop",
+  "Raise the stop under each correction low, or under the 30-week average if lower and rising. Once the average flattens, tighten it."
+ ],
+ "185-186": [
+  "Tighter when topping",
+  "When the average stops rising, put the stop right under the latest correction low, even if it is above the average."
+ ],
+ "186": [
+  "Let the stop work",
+  "Make selling mechanical: the stop decides, not a weekly debate."
+ ],
+ "187-188": [
+  "Give it room",
+  "While the average is rising at a steep angle, give the stock plenty of room: keep the stop below the average so normal swings do not shake you out."
+ ],
+ "193": [
+  "Overextended",
+  "If a stock rockets far above its 30-week average, consider locking in a quarter to a half of the position and trailing the rest."
+ ],
+ "194": [
+  "Trader's stop",
+  "A trader wants a faster, smaller move, so use a closer stop: under the nearest prior low, or 4-6% below the breakout."
+ ],
+ "194-195": [
+  "Trader's stop",
+  "Under the nearest prior low, or about 4-6% below the breakout and under a round number."
+ ],
+ "195": [
+  "Trader's corrections",
+  "Traders ignore corrections under about 7% and raise the stop under each meaningful correction low."
+ ],
+ "195-196": [
+  "Trader's trailing",
+  "Raise the stop under each correction low of 7% or more; never use the average as the stop for a trade."
+ ],
+ "196": [
+  "Trader's exit",
+  "A trader should not hold a stock that closes below its 30-week average, even slightly."
+ ],
+ "198-201": [
+  "Trendline sale",
+  "When a rising trendline with three or more touches breaks, sell about half. The rest goes on the stop."
+ ],
+ "199": [
+  "Trendline",
+  "A valid trendline connects at least three points. Its break signals fading momentum; sell part."
+ ],
+ "200": [
+  "Trendline",
+  "Trendline stops for half the position, the last correction low for the other half."
+ ],
+ "202-205": [
+  "Swing rule",
+  "Subtract the low after an important decline from the peak before it, and add the difference to that peak. That gives a near-term target; sell part near it."
+ ],
+ "205": [
+  "Swing rule",
+  "Sell at least part of a trading position near the projected level and let the stop take the rest."
+ ],
+ "208": [
+  "Failed breakout",
+  "Real winners rarely fall back below the breakout point. If one does, a trader should get out."
+ ],
+ "270": [
+  "Dow stage",
+  "The Dow's stage is the one market indicator you can't skip. Be aggressive only when the major trend is clearly bullish."
+ ],
+ "275": [
+  "Advance-decline line",
+  "The advance-decline line should confirm new highs in the averages. A lagging line is a warning."
+ ],
+ "283": [
+  "Momentum index",
+  "A 200-day average of daily net advances measures the market's underlying strength."
+ ],
+ "287": [
+  "New highs and lows",
+  "New highs minus new lows is a long-term gauge of market health."
+ ],
+ "294": [
+  "World markets",
+  "The stage of world averages helps spot major market turns."
+ ],
+ "297": [
+  "General Motors",
+  "A heavily owned bellwether like General Motors is watched for the market's major trend."
+ ],
+ "313": [
+  "Simple average",
+  "The 30-week average is simple: add up 30 weeks, divide by 30, then roll forward one week at a time."
+ ]
+}
+
+PAGE_JS = r"""
+(function(){
+var N=__NOTES__,BOOK="__BOOK__",OFF=__OFF__;
+var pop=document.getElementById('pgpop');
+var RX=/\bp\.(\d{1,3})(?:\s*[-–]\s*(\d{1,3}))?/g;
+function el(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!==undefined)n.textContent=x;return n;}
+function entry(k,a){return N[k]||N[a]||null;}
+function link(root){
+  var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(n){
+    var p=n.parentNode;if(!p||p.closest('script,style,textarea,input,.pg,#pgpop'))return NodeFilter.FILTER_REJECT;
+    RX.lastIndex=0;return RX.test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;}});
+  var list=[],n;while((n=w.nextNode()))list.push(n);
+  list.forEach(function(t){
+    var s=t.nodeValue,f=document.createDocumentFragment(),i=0,m;RX.lastIndex=0;
+    while((m=RX.exec(s))){
+      if(m.index>i)f.appendChild(document.createTextNode(s.slice(i,m.index)));
+      var b=el('span','pg',m[0]);b.tabIndex=0;b.setAttribute('role','button');
+      b.dataset.a=m[1];b.dataset.k=m[2]?m[1]+'-'+m[2]:m[1];f.appendChild(b);i=m.index+m[0].length;}
+    if(i<s.length)f.appendChild(document.createTextNode(s.slice(i)));
+    t.parentNode.replaceChild(f,t);});
+}
+function show(b){
+  var k=b.dataset.k,a=b.dataset.a,e=entry(k,a);
+  pop.textContent="";
+  pop.appendChild(el('b','pgh',(e?e[0]+"  ·  ":"")+"p."+k.replace('-','–')));
+  pop.appendChild(el('p','pgt',e?e[1]:"See page "+a+" of the book."));
+  if(BOOK){var u=BOOK+"#page="+(parseInt(a,10)+OFF);
+    var l=el('a','pgl',"Open this page in the book ↗");l.href=u;l.target="_blank";l.rel="noopener noreferrer";pop.appendChild(l);}
+  pop.hidden=false;
+  var r=b.getBoundingClientRect(),pw=pop.offsetWidth,x=Math.min(Math.max(8,r.left+window.scrollX),window.scrollX+document.documentElement.clientWidth-pw-8);
+  pop.style.left=x+"px";pop.style.top=(r.bottom+window.scrollY+6)+"px";pop.dataset.for=k;
+}
+function hide(){pop.hidden=true;}
+document.addEventListener('click',function(ev){
+  var b=ev.target.closest&&ev.target.closest('.pg');
+  if(b){ev.preventDefault();if(!pop.hidden&&pop.dataset.for===b.dataset.k)hide();else show(b);return;}
+  if(!ev.target.closest('#pgpop'))hide();});
+document.addEventListener('keydown',function(ev){
+  if(ev.key==='Escape')hide();
+  if((ev.key==='Enter'||ev.key===' ')&&ev.target.classList&&ev.target.classList.contains('pg')){ev.preventDefault();show(ev.target);}});
+document.addEventListener('mouseover',function(ev){var b=ev.target.closest&&ev.target.closest('.pg');if(b&&window.matchMedia('(hover:hover)').matches)show(b);});
+var timer=null;
+function run(){timer=null;link(document.body);}
+new MutationObserver(function(){if(!timer)timer=setTimeout(run,60);}).observe(document.body,{childList:true,subtree:true});
+run();
+})();
+"""
+PAGE_JS = (PAGE_JS.replace("__NOTES__", json.dumps(RULE_NOTES, ensure_ascii=False).replace("</", "<\\/"))
+                  .replace("__BOOK__", BOOK_URL.replace('"', "")).replace("__OFF__", str(BOOK_OFFSET)))
 
 
 LOOKUP_JS = r"""
@@ -641,6 +986,9 @@ td .bdg{margin-left:6px;vertical-align:middle}
 .ck i{font-style:normal;font-weight:800;width:18px;text-align:center;flex:none}.ck b{width:150px;flex:none}.ck span{color:#3b4456}
 .ck.pass i{color:#1f9d55}.ck.fail i{color:#c0392b}.ck.warn i{color:#d19200}.ck.na i{color:#9aa3b4}
 .ck.fail b{color:#a52a1d}.lkfoot{margin:10px 0 0;font-size:11.5px;color:#8a93a5}
+.pg{color:#1d4f7a;border-bottom:1px dotted #1d4f7a;cursor:pointer;white-space:nowrap}.pg:hover,.pg:focus{background:#e8f0f8;outline:none}
+#pgpop{position:absolute;z-index:50;max-width:320px;background:#fff;border:1px solid #cfd6e3;border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(20,30,60,.22);font-size:12.5px;line-height:1.4;color:#1c2333}
+#pgpop[hidden]{display:none}.pgh{display:block;color:#0f2a4a;margin-bottom:3px}.pgt{margin:0}.pgl{display:inline-block;margin-top:8px;font-weight:700;color:#1d4f7a}
 .exitplan{margin:8px 0 0;font-size:12.5px;background:#fff;border:1px solid #cfe7d8;border-radius:8px;padding:6px 10px}
 .exitplan summary{cursor:pointer;font-weight:700;color:#157a41}.exitplan p{margin:6px 0;color:#3b4456}
 .pos-wrap{max-width:1040px;margin:18px auto;padding:0 20px}.pos-h{margin:0 0 10px;font-size:20px}.pos-sub{font-size:12px;font-weight:400;color:#6b7689;margin-left:8px}

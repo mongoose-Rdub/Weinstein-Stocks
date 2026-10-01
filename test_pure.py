@@ -109,7 +109,7 @@ assert W.verdict(m(resistance_clear=False),strict)=="WATCH - RESISTANCE OVERHEAD
 assert W.CFG["resistance_mode"]=="strict"
 ok("strict (the default) discards the stock; flag keeps it")
 
-print("\n8. Entry point, not height, decides 'too late' (p.46, p.62, p.71, p.139)")
+print("\n8. Entry point, not height, decides 'too late' (p.36, p.62, p.61, p.129)")
 # fresh breakout 18% past the breakout level -> wait for the pullback
 assert W.verdict(m(pct_above_breakout=18.),cfg)==W.WAIT_VERDICT
 # Swift Energy: 150% above the ORIGINAL breakout, but it consolidated back to
@@ -125,7 +125,7 @@ print(f"   runaway, never tested the MA -> {run}")
 assert run=="STAGE 2 - HOLD"
 # continuation already 15% past its base top -> wait
 assert W.verdict(m(stage_weeks=30,pct_above_consol=15.),cfg)==W.WAIT_VERDICT
-# continuation with a flattening MA is refused ("This is important!" p.71)
+# continuation with a flattening MA is refused ("This is important!" p.61)
 assert W.verdict(m(stage_weeks=30,ma_state="Flat",vol_ratio_4wk=2.5),cfg)!="CONTINUATION - BUY"
 ok("breakouts and continuations judged by distance from their own entry point")
 
@@ -231,7 +231,7 @@ narrow=W.analyse("B",wk,None,frame(np.linspace(100,150,len(p))),dict(cfg,wide_st
 assert narrow["base_wide"]==False and rr["base_wide"]==(rr["base_risk_pct"]<-15)
 ok("base stop computed under the floor, flagged against the 15% limit")
 
-print("\n9i. A Stage 2 needs a base behind it (p.33, p.139)")
+print("\n9i. A Stage 2 needs a base behind it (p.33, p.129)")
 assert W.verdict(m(base_weeks_before=20),cfg)=="BREAKOUT - BUY"
 assert W.verdict(m(base_weeks_before=2,new_high=False),cfg)==W.NO_BASE_VERDICT
 assert W.verdict(m(stage_weeks=6,new_high=False,vol_ratio_4wk=0.6,vol_vs_peak=0.2,pct_above_breakout=-1.,base_weeks_before=2),cfg)==W.NO_BASE_VERDICT
@@ -285,7 +285,7 @@ print(f"   V-shaped rally: {nv} weeks")
 assert nv<8
 ok("sideways range found behind a breakout; none behind a V")
 
-print("\n9n. Trailed stop (p.194)")
+print("\n9n. Trailed stop (p.184)")
 # breakout at index 0 (peak 100), 12% correction to 88, recovery to 99, then a drift
 hi=[100,101,102,103,104,100,96,92,93,97,101,105]
 lo=[ 98, 99,100,101,102, 92,88,89,90,94, 99,102]
@@ -473,7 +473,7 @@ assert W.swing_target(wsw,bo_i3,40.0,W.CFG) is None          # target already pa
 assert W.swing_target(wsw,bo_i3,10.0,dict(W.CFG,swing_max_gain_pct=100))is None  # implausibly far
 assert W.swing_target(frame(np.linspace(10,30,150)),100,25.0,W.CFG) is None  # no important decline
 ok("swing rule: peak 26, low 16 projects 36; stale, absurd and no-decline cases return nothing")
-# trader stop (p.194): no nearby reaction low -> about 5% under the breakout; a close one wins
+# trader stop (p.194-195): no nearby reaction low -> about 5% under the breakout; a close one wins
 wt=frame(np.concatenate([np.full(30,17.0),np.linspace(20.4,24,10)]))     # lows far below: no close reaction low
 ts=W.trader_stop(wt,30,20.375,W.CFG)
 assert 0.93*20.375<=ts<=0.96*20.375, ts
@@ -536,6 +536,19 @@ hv=wl["Volume"].copy(); hv.iloc[60]=6e6; wl3=wl.assign(Volume=hv)
 bl3=W.position_status({"ticker":"LV","buy_date":wl3.index[60].date(),"buy_price":10.6,"style":"investor"},wl3,ml,sl,W.CFG)
 assert bl3["status"]!="SELL ON FIRST RALLY", bl3["status"]
 ok("light-volume breakout: sell on first rally / dump if it falls back; heavy volume is not flagged")
+
+
+print("\n12e. Every page cited on the dashboard has a plain-English note")
+import re as _re2, sys as _sys2
+_sys2.argv=["x"]
+import build_dashboard as _BD
+_here=os.path.dirname(os.path.abspath(__file__))
+_src=open(os.path.join(_here,"weinstein_pure.py")).read()+open(os.path.join(_here,"build_dashboard.py")).read()
+_toks=set(m.group(0)[2:] for m in _re2.finditer(r"\bp\.\d{1,3}(?:-\d{1,3})?",_src))
+_miss=sorted(t_ for t_ in _toks if t_ not in _BD.RULE_NOTES and t_.split("-")[0] not in _BD.RULE_NOTES)
+assert not _miss, _miss
+assert "p.139" not in _src, "the 'don't buy' list is on printed page 129"
+ok(f"{len(_toks)} cited pages all have notes; no stale p.139 references")
 
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module

@@ -141,19 +141,19 @@ CFG = {
     "continuation_lookback": 8,
     # Continuation buy: "after a Stage 2 advance is well underway, when the
     # stock drops back close to its MA and consolidates. It then breaks out
-    # anew above the top of its resistance zone" (p.71). The book gives no
+    # anew above the top of its resistance zone" (p.61). The book gives no
     # number for "close to"; 8% is our reading of it.
     "consol_near_ma_pct": 8.0,
 
     # "No matter how bullish a stock is, don't buy it too late in an advance,
-    # when it is far above the ideal entry point" (p.139). "If you miss it at
+    # when it is far above the ideal entry point" (p.129). "If you miss it at
     # 12 1/8, buying at 12 7/8 is no big deal, but paying 25 or 26 sure is!"
-    # (p.46). The book gives no exact cutoff; 10% above the entry point is our
-    # reading of "far above". About 80% of initial breakouts pull back (p.72),
+    # (p.36). The book gives no exact cutoff; 10% above the entry point is our
+    # reading of "far above". About 80% of initial breakouts pull back (p.62),
     # so a stock past this line goes to WAIT, not AVOID.
     "max_chase_pct": 10.0,
 
-    # "strict" -> nearby resistance discards the stock (p.115, p.139 literally);
+    # "strict" -> nearby resistance discards the stock (p.115, p.129 literally);
     #             discarded candidates are still listed in their own table.
     # "flag"   -> nearby resistance is only shown in the RESISTANCE column.
     "resistance_mode": "strict",
@@ -164,7 +164,7 @@ CFG = {
     "stop_tick": 0.125,
     # A pullback buy is the second half of a position opened at the breakout
     # (p.34, p.115), so it carries that position's TRAILED stop: raised after
-    # the first correction of "at least 8 to 10 percent" (p.194).
+    # the first correction of "at least 8 to 10 percent" (p.184).
     "stop_correction_pct": 0.08,
 
     # "for a small portfolio ($10,000 to $25,000), I'd diversify into no more
@@ -201,7 +201,7 @@ CFG = {
     "swing_lookback_weeks": 156,   # how far before the breakout to look for the peak A; OURS
     "swing_min_decline_pct": 20.0, # the decline A->B must be "important"; OURS
     "swing_max_gain_pct": 100.0,   # ignore projections more than this far above price; OURS
-    "trader_stop_pct": 5.0,        # "4 to 6 percent below the breakout" (p.194): midpoint
+    "trader_stop_pct": 5.0,        # "4 to 6 percent below the breakout" (p.194-195): midpoint
     "trader_low_weeks": 8,         # "closest prior reaction low": looked for in this many weeks; OURS
     "trader_stop_max_pct": 8.0,    # a reaction low deeper than this is not "closest"; OURS
     "trader_correction_pct": 0.07, # "corrections of less than 7 percent" are ignored (p.195)
@@ -430,7 +430,7 @@ def basing_run(stv, dur, min_weeks):
 
 
 def trailed_correction_low(weekly, start, correction_pct, recover_frac=0.5):
-    """Low of the latest COMPLETED correction since Stage 2 began (p.194).
+    """Low of the latest COMPLETED correction since Stage 2 began (p.184).
 
     "After the first substantial correction of at least 8 to 10 percent, you
     are now going to get set to raise the stop. But you don't actually change
@@ -507,7 +507,7 @@ def overhead_resistance(weekly: pd.DataFrame, cfg: dict,
     # HOW MUCH supply is overhead. The book separates "some (but not
     # overwhelming) resistance" and a rally that merely "failed" at a level
     # from HEAVY supply: a trading area the stock spent real time in, above all
-    # one where it broke down or was turned back again and again (p.110, p.145:
+    # one where it broke down or was turned back again and again (p.100, p.110:
     # Pan Am's "heavy supply near 7 where it broke down", tops "above 8 in each
     # of the four years"). Supply comes from holders who bought up there, so it
     # is measured as the number of non-stale weeks the stock traded inside the
@@ -825,7 +825,7 @@ def position_status(pos, weekly, ma, stages, cfg):
 
     if stage_at_buy != 2:
         notes.append(f"bought while the stock was in Stage {stage_at_buy}; the book buys only Stage 2 breakouts and "
-                     f"pullbacks (p.139), so the stop history here is approximate.")
+                     f"pullbacks (p.129), so the stop history here is approximate.")
     if hit:
         status = "SELL - STOP HIT"
         notes.append(f"price traded through the book stop ({hit[1]:.2f}) in the week of {hit[0]}: "
@@ -1088,7 +1088,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     else:
         res = overhead_resistance(weekly, cfg)
 
-    # --- continuation breakout (p.71): the stock "drops back close to its MA
+    # --- continuation breakout (p.61): the stock "drops back close to its MA
     # --- and consolidates. It then breaks out anew above the top of its
     # --- resistance zone." (Swift Energy's second breakout, p.62)
     cl = cfg["continuation_lookback"]
@@ -1105,7 +1105,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     new_high = price > cons_top
     pct_above_cons = (price - cons_top) / cons_top * 100 if np.isfinite(cons_top) else np.nan
 
-    # --- was there a base before this Stage 2? (p.33, p.139) ---
+    # --- was there a base before this Stage 2? (p.33, p.129) ---
     # Stage 2 follows a Stage 1 base; "don't guess a bottom... buy on breakouts
     # above resistance". Count the unbroken run of basing weeks (Stage 1, or
     # Stage 3 for a stock that topped and re-based) just before Stage 2 began.
@@ -1113,7 +1113,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         stages.to_numpy(), dur, cfg["base_min_weeks"])
     # A stock that was already advancing, dipped under its MA briefly and then
     # broke out to new highs is re-starting an advance, not emerging from a
-    # decline (p.71, p.200). The "needs a base" rule is about the latter.
+    # decline (p.61-62). The "needs a base" rule is about the latter.
     # "Already advancing" = a real Stage 2 run (8+ weeks) within the last two
     # years, whatever the labels did in between.
     stv_all = stages.to_numpy()
@@ -1134,7 +1134,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     # "Pay less attention to the MA and more to the prior correction low": the
     # initial stop goes under the floor of the base the stock broke out of (the
     # consolidation low, for a continuation buy). The "keep it below the MA"
-    # rule (p.184, p.190) governs RAISING a stop on a stock already held, so it
+    # rule (p.184, p.187-188) governs RAISING a stop on a stock already held, so it
     # is not used for a new purchase.
     # The floor is the low of the BASE itself, not of the decline before it.
     start = len(weekly) - dur
@@ -1166,7 +1166,7 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     stop = stop_base
     # trailed stop for a pullback buy: under the latest completed correction's
     # low, or under the MA when that low sits above it ("correction low is 21,
-    # while the MA is up to 20" -> 19 7/8, p.194). Stops only move up.
+    # while the MA is up to 20" -> 19 7/8, p.184). Stops only move up.
     corr = trailed_correction_low(weekly, start, cfg["stop_correction_pct"])
     stop_trail = None
     if corr is not None:
@@ -1250,12 +1250,12 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     m["stop_basis"] = "base floor"
     if v0 == "PULLBACK - BUY" and stop_trail is not None:
         pct = (stop_trail - price) / price * 100
-        m["stop_basis"] = "trailed stop (correction low or MA, p.194)"
+        m["stop_basis"] = "trailed stop (correction low or MA, p.184)"
         m.update({"stop": round(stop_trail, 2), "stop_pct": round(pct, 1),
                   "wide_stop": bool(pct < -cfg["wide_stop_pct"])})
     if v0 == "CONTINUATION - BUY":
         # the floor this breakout came out of is the consolidation, not the
-        # original base (p.71)
+        # original base (p.61)
         m["stop_basis"] = "consolidation low"
         pct = (stop_cons - price) / price * 100
         m.update({"stop": round(stop_cons, 2), "stop_pct": round(pct, 1),
@@ -1272,7 +1272,7 @@ def verdict(m, cfg):
     distance from the 30-week MA or the size of the prior gain. Swift Energy
     was not "too high" after 150% (p.62) because it consolidated back to its
     MA and gave a fresh entry point -- but "don't buy it too late in an
-    advance, when it is far above the ideal entry point" (p.139).
+    advance, when it is far above the ideal entry point" (p.129).
     """
     stage = m["stage"]
 
@@ -1332,9 +1332,9 @@ def verdict(m, cfg):
                and not m.get("after_advance"))
 
     # continuation: new high out of a base that came back near the MA, with
-    # the MA "clearly trending higher. This is important!" (p.71)
+    # the MA "clearly trending higher. This is important!" (p.61)
     # ...and it must actually BE a consolidation -- a resistance zone, not a
-    # rally that merely brushed the MA (p.71). Same width limit as any range.
+    # rally that merely brushed the MA (p.61). Same width limit as any range.
     cw = m.get("consol_width_pct")
     is_consol = cw is None or cw <= cfg["base_max_width"] * 100
     fresh_now = m["stage_weeks"] <= cfg["fresh_weeks"]
@@ -1355,7 +1355,7 @@ def verdict(m, cfg):
         if no_base:
             # Stage 2 just restarted but there was no Stage 1 base. If the stock
             # was already advancing, consolidated near its MA, and is breaking
-            # out anew, that is the book's continuation buy (p.71) -- the stage
+            # out anew, that is the book's continuation buy (p.61) -- the stage
             # count merely reset when price dipped under the MA.
             return continuation_verdict() if continuation else NO_BASE_VERDICT
         if not heavy_bo:
@@ -1365,7 +1365,7 @@ def verdict(m, cfg):
         pb = m.get("pct_above_breakout")
         if pb is not None and pb > chase:
             # already far above the entry point; ~80% of initial breakouts
-            # pull back toward it (p.72), so wait for that
+            # pull back toward it (p.62), so wait for that
             return WAIT_VERDICT
         return "BREAKOUT - BUY"
 
@@ -1406,9 +1406,9 @@ def explain(m, cfg, mkt=None):
 
     # 1. market
     if mkt.get("blocked"):
-        add("Market trend", "fail", "S&P 500 or Dow is in Stage 4: no buying (p.139, p.270)", "p.139")
+        add("Market trend", "fail", "S&P 500 or Dow is in Stage 4: no buying (p.129, p.270)", "p.129")
     else:
-        add("Market trend", "pass", "S&P 500 and Dow are not in Stage 4", "p.139")
+        add("Market trend", "pass", "S&P 500 and Dow are not in Stage 4", "p.129")
 
     # 2. sector
     gs, gname = m.get("group_stage"), m.get("group") or "sector"
@@ -1417,7 +1417,7 @@ def explain(m, cfg, mkt=None):
     elif gs in (1, 2):
         add("Sector", "pass", f"{gname} is in Stage {gs}", "p.78")
     else:
-        add("Sector", "fail", f"{gname} is in Stage {gs}: don't buy a stock in a negative group (p.139)", "p.139")
+        add("Sector", "fail", f"{gname} is in Stage {gs}: don't buy a stock in a negative group (p.129)", "p.129")
 
     # 3. stage
     if stage == 2:
@@ -1436,9 +1436,9 @@ def explain(m, cfg, mkt=None):
     if px is not None and ma:
         pa = (px / ma - 1) * 100
         if px < ma:
-            add("30-week average", "fail", f"price ${px:,.2f} is {abs(pa):.1f}% BELOW the 30-week average ${ma:,.2f} (p.139)", "p.139")
+            add("30-week average", "fail", f"price ${px:,.2f} is {abs(pa):.1f}% BELOW the 30-week average ${ma:,.2f} (p.129)", "p.129")
         elif m.get("ma_state") == "Falling":
-            add("30-week average", "fail", f"average is declining: don't buy even above it (p.139)", "p.139")
+            add("30-week average", "fail", f"average is declining: don't buy even above it (p.129)", "p.129")
         else:
             add("30-week average", "pass", f"price {pa:.1f}% above a {str(m.get('ma_state')).lower()} average (${ma:,.2f})", "p.14")
 
@@ -1448,7 +1448,7 @@ def explain(m, cfg, mkt=None):
         if m.get("after_advance") or (bw is not None and bw >= cfg["base_min_weeks"]):
             add("Base behind it", "pass", f"{bw} weeks of basing before this advance" if bw else "restart of an earlier advance", "p.33")
         else:
-            add("Base behind it", "fail", f"only {bw} weeks of base: V-shaped, don't guess a bottom (p.139)", "p.139")
+            add("Base behind it", "fail", f"only {bw} weeks of base: V-shaped, don't guess a bottom (p.129)", "p.129")
 
     # 6. breakout volume
     if stage == 2:
@@ -1494,9 +1494,9 @@ def explain(m, cfg, mkt=None):
     if stage == 2 and pb is not None and bo:
         if fresh:
             if pb <= cfg["max_chase_pct"]:
-                add("Entry point", "pass", f"{pb:+.1f}% from the ${bo:,.2f} breakout: close to the entry (p.139)", "p.139")
+                add("Entry point", "pass", f"{pb:+.1f}% from the ${bo:,.2f} breakout: close to the entry (p.129)", "p.129")
             else:
-                add("Entry point", "fail", f"{pb:+.1f}% above the ${bo:,.2f} breakout: too late, wait for a pullback (p.139)", "p.139")
+                add("Entry point", "fail", f"{pb:+.1f}% above the ${bo:,.2f} breakout: too late, wait for a pullback (p.129)", "p.129")
         elif -cfg["pullback_below"] <= pb <= cfg["pullback_band"]:
             add("Entry point", "pass", f"in the pullback zone, {pb:+.1f}% from the ${bo:,.2f} breakout (p.34)", "p.34")
         elif pb > cfg["pullback_band"]:
@@ -1518,7 +1518,7 @@ def explain(m, cfg, mkt=None):
                and -cfg["pullback_below"] <= pb <= cfg["pullback_band"])
     if in_zone and m.get("trail_stop") is not None:
         sp, spp = m["trail_stop"], m["trail_stop_pct"]
-        basis = "trailed stop under the correction low or average (p.194)"
+        basis = "trailed stop under the correction low or average (p.184)"
     if stage == 2 and not fresh and pb is not None and pb > cfg["pullback_band"] \
             and m.get("verdict") not in BUY_VERDICTS:
         add("Stop within 15%", "na", "a stop is set when you buy; not meaningful this far above the entry", "p.183")
@@ -1539,7 +1539,7 @@ def explain(m, cfg, mkt=None):
     # 12. triple confirmation
     ts = m.get("triple_score")
     if stage == 2 and ts is not None and fresh:
-        add("Triple confirmation", "pass" if ts == 3 else "na", f"{int(ts)}/3 of volume, RS turning positive, 40%+ run before breakout (p.150)", "p.150")
+        add("Triple confirmation", "pass" if ts == 3 else "na", f"{int(ts)}/3 of volume, RS turning positive, 40%+ run before breakout (p.150-152)", "p.150-152")
     return ck
 
 
@@ -1781,7 +1781,7 @@ def main():
     elif args.universe == "sp1500":
         tickers, smap = infra.load_sp1500()
     elif args.universe == "all":
-        # the whole listed market, as Weinstein's chart books were (p.46)
+        # the whole listed market, as Weinstein's chart books were (p.31)
         tickers, smap, umeta = uf.build_universe(
             min_price=cfg["min_price"], prefilter_dollar_vol=0, sector_path=args.sector_file,
             sector_budget=args.sector_budget,
@@ -1860,12 +1860,12 @@ def main():
     if args.detail or args.tickers:
         print_detail(df)
 
-    # "Don't buy when the overall market trend is bearish." (p.139)
+    # "Don't buy when the overall market trend is bearish." (p.129)
     blocked = (mkt_stage == 4 or dow_stage == 4) and not args.all
     if blocked:
         print("=" * 84)
         print("MARKET (S&P 500 or Dow) IS IN STAGE 4.  Weinstein: don't buy when the overall market "
-              "trend is bearish (p.139, p.270).")
+              "trend is bearish (p.129, p.270).")
         print("All buys below are SUPPRESSED; run with --all to see them anyway.")
         print("=" * 84 + "\n")
 
@@ -1894,7 +1894,7 @@ def main():
                & df["trail_stop_pct"].notna()
                & (df["trail_stop_pct"] >= -cfg["wide_stop_pct"]))
     near = df[nm_mask].sort_values("vol_vs_peak")
-    # Discarded for nearby overhead resistance (p.115, p.139): everything that
+    # Discarded for nearby overhead resistance (p.115, p.129): everything that
     # would otherwise have been a buy, a buy-stop candidate or a near miss
     RES = "WATCH - RESISTANCE OVERHEAD"
     v0 = df["verdict_no_res"]
@@ -1923,7 +1923,7 @@ def main():
         return v
 
     def _entry_zone(r, kind):
-        """entry zone per the book: buy the breakout (p.150), don't chase (p.139)."""
+        """entry zone per the book: buy the breakout (p.150), don't chase (p.129)."""
         chase = 1 + cfg["max_chase_pct"] / 100
         if kind == "pullback":
             bo = r["breakout_level"]
@@ -2146,7 +2146,7 @@ def main():
     print()
     print("=" * 84)
     print(f"WAIT FOR PULLBACK  ({len(waits)})   -- good breakout, but more than "
-          f"{cfg['max_chase_pct']:.0f}% above the entry point (p.139)")
+          f"{cfg['max_chase_pct']:.0f}% above the entry point (p.129)")
     print("=" * 84)
     if waits.empty:
         print("  none this week")
@@ -2184,7 +2184,7 @@ def main():
     print()
     print("=" * 96)
     print(f"DISCARDED - OVERHEAD RESISTANCE  ({len(disc)})   -- would otherwise qualify, but supply sits within "
-          f"{cfg['resistance_near_pct']:.0f}% overhead (p.115, p.139)")
+          f"{cfg['resistance_near_pct']:.0f}% overhead (p.115, p.129)")
     print("=" * 96)
     if disc.empty:
         print("  none this week")
