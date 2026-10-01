@@ -135,7 +135,9 @@ def profit_plan(r):
                 f"says to lock in a quarter to a half of the position when a stock gets far above it (p.193).")
     tr = []
     ts = r.get("trader_stop")
-    if not _bad(ts):
+    sp_ = r.get("stop")
+    # a trader stop is only shown when it is actually closer than the investor stop
+    if not _bad(ts) and (_bad(sp_) or ts > sp_):
         tr.append(f"stop {money(ts)} ({pct(r.get('trader_stop_pct'))}), a closer stop than the investor's: "
                   f"strong breakouts rarely fall more than 4-6% below the breakout (p.194-195)")
     if not _bad(r.get("swing_target")):
@@ -1053,7 +1055,7 @@ header h1{margin:0;font-size:26px;letter-spacing:.3px}header p{margin:4px 0 0;op
 main{max-width:1240px;margin:18px auto;padding:0 20px;display:grid;gap:18px}
 .tile{display:block;text-decoration:none;color:inherit}a.tile:hover{box-shadow:0 2px 8px rgba(20,30,60,.16)}
 .panel summary.ph{cursor:pointer;list-style:none;display:block;padding:14px 18px 10px;position:relative}.panel summary.ph::-webkit-details-marker{display:none}
-.panel summary.ph::after{content:"\25b8";position:absolute;right:18px;top:14px;color:#8a93a5;font-size:16px;transition:transform .15s}.panel[open] summary.ph::after{transform:rotate(90deg)}
+.panel summary.ph::after{content:"▸";position:absolute;right:18px;top:14px;color:#8a93a5;font-size:16px;transition:transform .15s}.panel[open] summary.ph::after{transform:rotate(90deg)}
 .sh{display:block;font-size:17px;font-weight:700}.ssub{display:block;margin-top:3px;color:#5d6778;font-size:13px;padding-right:28px}
 .near .sh{color:#a87100}.watch .sh{color:#2469b4}.wait .sh{color:#7547b8}.skip .sh{color:#c2471f}.disc .sh{color:#5f6878}.susp .sh{color:#46546b}
 .listbar{max-width:1240px;margin:22px auto 0;padding:0 20px;display:flex;justify-content:space-between;align-items:center;font-size:14px}

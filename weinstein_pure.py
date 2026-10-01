@@ -1855,12 +1855,16 @@ def main():
     groups = {}
     groups_rs = {}
     gdetail = {}
-    gdata = yf.download(list(infra.SECTOR_ETFS.values()), period="4y",
-                        interval="1wk", group_by="ticker",
+    # Daily bars, rolled up the same way as the stocks and the index: a week still
+    # in progress is dropped, and bars are labelled by their Friday so the
+    # relative-strength line lines up with the index.
+    gdata = yf.download(list(infra.SECTOR_ETFS.values()), period="5y",
+                        interval="1d", group_by="ticker",
                         auto_adjust=True, progress=False)
     for name, etf in infra.SECTOR_ETFS.items():
         try:
-            f = infra._extract_ticker_frame(gdata, etf).dropna()
+            f = completed_weekly(infra._extract_ticker_frame(gdata, etf).dropna(),
+                                 args.include_partial)
             gma = infra.moving_average(f["Close"], cfg["ma_length"], cfg["ma_type"])
             _gst = classify(f, gma, cfg)[0]
             groups[name] = int(_gst.iloc[-1])
