@@ -43,6 +43,10 @@ jobs:
           path: .price_cache
           key: prices-${{ github.run_id }}
       - name: Build dashboard
+        env:
+          # optional: web address of a PDF of the book you may link to (Settings > Variables)
+          BOOK_PDF_URL: ${{ vars.BOOK_PDF_URL }}
+          BOOK_PDF_OFFSET: ${{ vars.BOOK_PDF_OFFSET }}
         run: |
           mkdir -p docs data
           python build_dashboard.py weinstein_feed.json docs/index.html
