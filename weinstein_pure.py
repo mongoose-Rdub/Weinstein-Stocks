@@ -888,6 +888,45 @@ def position_status(pos, weekly, ma, stages, cfg):
     }
 
 
+def largest_stocks_gauge(df_all, mcap_df, n=10):
+    """OUR ADDITION, not the book's: how the ten largest stocks stand. The book
+    watches General Motors because the most heavily owned stocks outvote the
+    rest (p.297); today's heaviest stocks are different companies, so this
+    applies the same stage test to them. Positive when at least 70% are in
+    Stage 2, negative when at least 40% are in Stage 3 or 4; both cut-offs are
+    ours."""
+    if mcap_df is None or df_all is None or len(df_all) == 0:
+        return None
+    import re as _re
+    caps = mcap_df["mcap"] if "mcap" in mcap_df.columns else None
+    if caps is None:
+        return None
+    names = mcap_df["name"] if "name" in mcap_df.columns else {}
+    have = df_all.set_index("ticker")["stage"]
+    picked, seen = [], set()
+    for sym in caps.dropna().sort_values(ascending=False).index:
+        if sym not in have.index:
+            continue
+        nm = _re.sub(r"[^a-z ]", "", str(names.get(sym, sym)).lower()).split()
+        key = " ".join(nm[:2]) or sym             # share classes of one company count once
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(sym)
+        if len(picked) >= n:
+            break
+    if len(picked) < max(5, n // 2):
+        return None
+    st = [int(have[s_]) for s_ in picked]
+    n2 = sum(1 for v in st if v == 2)
+    n34 = sum(1 for v in st if v in (3, 4))
+    status = "pos" if n2 >= 0.7 * len(st) else "neg" if n34 >= 0.4 * len(st) else "neutral"
+    out = [f"{s_} (S{v})" for s_, v in zip(picked, st) if v != 2]
+    detail = f"{n2} of {len(st)} in Stage 2" + (f"; not Stage 2: {', '.join(out)}" if out else "")
+    return {"name": f"{len(st)} largest stocks, stage on their own 30-week averages", "src": "ours",
+            "status": status, "detail": detail}
+
+
 def sector_history(stages, rs_series, close, ma, cfg):
     """History for one sector fund: its stage week by week, how long it has been
     in the current stage, what came before, and which way relative strength is
@@ -1807,7 +1846,7 @@ def main():
     dow_stage = _stage_of("^DJI")
     gauges.append(_stage_gauge("Dow Jones Industrials vs 30-week MA", dow_stage))
     gauges.append(_stage_gauge("World stock average (ACWI) vs 30-week MA", _stage_of("ACWI")))
-    gauges.append(_stage_gauge("General Motors vs 30-week MA", _stage_of("GM")))
+    gauges.append(_stage_gauge("General Motors, stage on its own 30-week average (the book's pick, p.297)", _stage_of("GM")))
     gauges = [g for g in gauges if g]
     if dow_stage == 4:
         print("  Dow is Stage 4 -- suspend buying (p.270).", file=sys.stderr)
@@ -1926,6 +1965,12 @@ def main():
             print(f"  breadth skipped: {exc}", file=sys.stderr)
 
     df_all = pd.DataFrame(rows)
+    try:
+        _lg = largest_stocks_gauge(df_all, uf.LAST_ROWS)
+        if _lg:
+            gauges.append(_lg)
+    except Exception as exc:
+        print(f"  largest-stocks gauge skipped: {exc}", file=sys.stderr)
     df = df_all[df_all["group_ok"]].reset_index(drop=True)
     out_path = args.out
     if (args.tickers or args.file) and args.out == "weinstein_results.csv":

@@ -128,6 +128,7 @@ def yf_sector_fill(tickers, cache, budget, deadline, lookup=None, sleep=time.sle
 
 
 _SPAC = None
+LAST_ROWS = None      # name and market cap per symbol from the last universe build (None if the Nasdaq API was unavailable)
 
 
 def is_blank_check(row):
@@ -158,6 +159,8 @@ def build_universe(min_price=0.0, prefilter_dollar_vol=0, sector_path="data/sect
     if rows is None:
         rows = nasdaq_rows(sleep=sleep)
 
+    global LAST_ROWS
+    LAST_ROWS = rows[["name", "mcap"]].copy() if rows is not None and "name" in rows.columns else None
     meta = {"listed": len(listed), "api": rows is not None}
     tickers = [norm_symbol(t) for t in listed]
     if rows is not None:

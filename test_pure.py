@@ -576,6 +576,42 @@ assert "Heating up" in _h and "Cooling off" in _h and "strip" in _h and "Stocks 
 assert _BD2.sector_panel({})=="" and _BD2.sector_panel({"group_detail":{}})==""
 ok("sector panel renders heating up / cooling off tags and the strips; older feeds render without it")
 
+print("\n12g. Largest-stocks gauge (our addition)")
+_names=["Alpha Inc. Class A","Alpha Inc. Class C","Beta Corp","Gamma Co","Delta Ltd","Eps Inc","Zeta Inc","Eta Inc","Theta Inc","Iota Inc","Kappa Inc","Lambda Inc"]
+_syms=["AA","AC","BB","GG","DD","EE","ZZ","HH","TT","II","KK","LL"]
+_mc=pd.DataFrame({"name":_names,"mcap":[12,11,10,9,8,7,6,5,4,3,2,1]},index=_syms)
+_df=pd.DataFrame({"ticker":_syms,"stage":[2]*12})
+g1=W.largest_stocks_gauge(_df,_mc)
+assert g1["status"]=="pos" and g1["src"]=="ours" and "10 of 10" in g1["detail"], g1       # AA/AC are one company, so 11 names -> top 10
+_df2=_df.copy(); _df2.loc[_df2.ticker.isin(["BB","GG","DD","EE"]),"stage"]=4
+g2=W.largest_stocks_gauge(_df2,_mc); assert g2["status"]=="neg" and "BB (S4)" in g2["detail"], g2
+_df3=_df.copy(); _df3.loc[_df3.ticker.isin(["BB","GG","DD","EE"]),"stage"]=1
+g3=W.largest_stocks_gauge(_df3,_mc); assert g3["status"]=="neutral", g3
+assert W.largest_stocks_gauge(_df,None) is None and W.largest_stocks_gauge(_df.iloc[:3],_mc) is None
+_h=_BD2.build({"generated":"2026-10-01T16:00-05:00","last_bar":"2026-10-02","market_stage":2,"market_blocked":False,"screened":1,
+  "groups":{"Tech":2},"favorable_groups":["Tech"],"market":{"gauges":[g1],"pos":1,"neg":0,"caution":False},
+  "rules":{"wide_stop_pct":15,"max_chase_pct":10,"breakout_vol_mult":2,"pullback_vol_peak_max":.25,"positions":15,"account_size":300000,"resistance_near_pct":20},
+  "active":[],"skip_stop":[],"watch":[],"watch_skip":[],"waits":[],"near":[],"disc":[],"suspects":[]})
+assert "our addition" in _h
+ok("ten largest stocks: one company counted once, positive/negative/neutral thresholds, hidden when data is thin; tagged 'our addition'")
+
+print("\n12h. Page order and collapsible lists")
+_feed={"generated":"2026-10-01T16:00-05:00","last_bar":"2026-10-02","market_stage":2,"market_blocked":False,"screened":1,
+  "groups":{"Tech":2},"favorable_groups":["Tech"],"market":{"gauges":[{"name":"g","status":"neg","detail":"d"}],"pos":0,"neg":1,"caution":True},
+  "rules":{"wide_stop_pct":15,"max_chase_pct":10,"breakout_vol_mult":2,"pullback_vol_peak_max":.25,"positions":15,"account_size":300000,"resistance_near_pct":20},
+  "active":[],"skip_stop":[],"watch":[],"watch_skip":[],"waits":[],"near":[],"disc":[],"suspects":[],
+  "group_detail":{"Tech":{"hist":[2]*26,"stage":2,"weeks":26,"prev_stage":1,"move":None,"rs":3.0,"rs_d4":1.0,"rs_d13":2.0,"pct_above_ma":10,"breadth":{"n":50,"now":40,"w4":35,"w13":20}}},
+  "_lookup":{"l":{},"u":["TST"]}}
+_pg=_BD2.build(_feed)
+_order=["class=\"mkt","class='caution'","class=\"tiles\"","id=\"active\"","id=\"positions\"","class=\"lookup\"","class=\"sectors\"","class='gauges'","class=\"listbar\"","id=\"sec-near\"","<footer>"]
+_ix=[_pg.find(x) for x in _order]
+assert all(i>0 for i in _ix) and _ix==sorted(_ix), list(zip(_order,_ix))
+for _c in ("near","watch","wait","skip","disc","susp"):
+    assert f'<details class="panel {_c}" id="sec-{_c}"' in _pg, _c
+assert ' id="sec-near" data-k="sec-near" open>' in _pg and ' id="sec-wait" data-k="sec-wait">' in _pg
+assert "data-jump='sec-near'" in _pg
+ok("market, scorecard, buys, positions, lookup, sectors, gauges, then six collapsible lists; near misses and watchlist open by default")
+
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize

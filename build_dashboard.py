@@ -210,7 +210,7 @@ def active_panel(d):
     else:
         body = f"<div class='abuys'>{''.join(active_card(r, rules) for r in a)}</div>"
     return f"""
-  <section class="hero">
+  <section class="hero" id="active">
     <div class="hero-head"><span class="dot"></span>ACTIVE BUYS
       <span class="count">{0 if d['market_blocked'] else len(a)}</span></div>
     {body}
@@ -221,6 +221,9 @@ def active_panel(d):
 
 
 # ---------------------------------------------------------------- tables
+OPEN_BY_DEFAULT = {"near", "watch"}      # the lists most likely to turn into buys soon
+
+
 def section(cls, title, sub, rows, cols, note=""):
     if not rows:
         body = "<div class='empty'>None this week</div>"
@@ -231,11 +234,12 @@ def section(cls, title, sub, rows, cols, note=""):
             trs += "<tr>" + "".join(f"<td class='{c[2] if len(c) > 2 else ''}'>{c[1](r)}</td>"
                                     for c in cols) + "</tr>"
         body = f"<div class='scroll'><table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table></div>"
+    opn = " open" if cls in OPEN_BY_DEFAULT else ""
     return f"""
-  <section class="panel {cls}">
-    <div class="ph"><h2>{title}<span class="count">{len(rows)}</span></h2><p>{sub}</p></div>
+  <details class="panel {cls}" id="sec-{cls}" data-k="sec-{cls}"{opn}>
+    <summary class="ph"><span class="sh">{title}<span class="count">{len(rows)}</span></span><span class="ssub">{sub}</span></summary>
     {body}{f'<div class="note">{note}</div>' if note else ''}
-  </section>"""
+  </details>"""
 
 
 def tk(r):
@@ -375,7 +379,7 @@ def build(d):
         for g, s in sorted(d["groups"].items()))
     mk = d.get("market") or {}
     gl = "".join(
-        f"<li class='{g['status']}'><b>{e(g['name'])}</b><span>{e(g['detail'])}</span></li>"
+        f"<li class='{g['status']}'><b>{e(g['name'])}{' <em class=ours>our addition</em>' if g.get('src') == 'ours' else ''}</b><span>{e(g['detail'])}</span></li>"
         for g in mk.get("gauges", []))
     caution = ""
     if mk.get("caution") and not blocked:
@@ -386,15 +390,17 @@ def build(d):
                   f"Market weight of the evidence: {mk.get('pos', 0)} positive, {mk.get('neg', 0)} negative"
                   f" ({len(mk.get('gauges', []))} gauges)</summary><ul>{gl}</ul>"
                   "<p class='gnote'>Breadth gauges use the S&amp;P 1500 as a stand-in for the NYSE. "
-                  "Not tracked: price/dividend ratio, contrary opinion, weekly NYSE common-stock new highs.</p>"
-                  f"</details>{caution}") if gl else ""
+                  "Gauges tagged \"our addition\" are not from the book. Not tracked: price/dividend ratio, contrary opinion, weekly NYSE common-stock new highs.</p>"
+                  f"</details>") if gl else ""
     tiles = [("a", "Active buys", 0 if blocked else len(d["active"])),
              ("n", "Near misses", len(d["near"])),
              ("w", "Buy-stop watch", len(d["watch"])),
              ("p", "Wait for pullback", len(d["waits"])),
              ("s", "Skip: stop too wide", len(d["skip_stop"]) + len(d["watch_skip"])),
              ("d", "Discarded: resistance", len(d["disc"]))]
-    tile_html = "".join(f"<div class='tile t{c}'><b>{n}</b><span>{t}</span></div>" for c, t, n in tiles)
+    jump = {"a": "active", "n": "sec-near", "w": "sec-watch", "p": "sec-wait", "s": "sec-skip", "d": "sec-disc"}
+    tile_html = "".join(f"<a class='tile t{c}' href='#{jump[c]}' data-jump='{jump[c]}'><b>{n}</b><span>{t}</span></a>"
+                        for c, t, n in tiles)
     cv = d.get("coverage") or {}
     cov_txt = ""
     if cv.get("universe"):
@@ -463,14 +469,16 @@ def build(d):
 </header>
 <div class="mkt {mcls}"><b>S&amp;P 500: {mtxt}</b>
   <span>{'Buying suspended: the book says do not buy into a bearish market.' if blocked else 'Market trend permits buying.'}</span></div>
+{caution}
+<div class="tiles">{tile_html}</div>
+{active_panel(d)}
+{POS_SECTION}
+{lookup_html}
 <div class="groups"><small>SECTORS</small>{groups}</div>
 {sector_panel(d)}
 {gauge_html}
-<div class="tiles">{tile_html}</div>
-{lookup_html}
-{active_panel(d)}
-{POS_SECTION}
 {hid}
+<div class="listbar"><b>Stock lists</b><span><button type="button" id="expall">Expand all</button><button type="button" id="colall">Collapse all</button></span></div>
 <main>{''.join(sections)}</main>
 <footer>
   <h3>How to read this</h3>
@@ -482,7 +490,7 @@ def build(d):
   Signals are mechanical and can be wrong; verify on the chart and size risk yourself. Data: Yahoo Finance, Friday weekly closes.
   Rules follow <i>Secrets for Profiting in Bull and Bear Markets</i>; thresholds the book does not specify are the author's choices.</p>
 </footer>
-<div id="pgpop" hidden></div><script>{PAGE_JS}</script></body></html>"""
+<div id="pgpop" hidden></div><script>{LIST_JS}</script><script>{PAGE_JS}</script></body></html>"""
 
 
 POS_SECTION = """
@@ -930,6 +938,23 @@ PAGE_JS = (PAGE_JS.replace("__NOTES__", json.dumps(RULE_NOTES, ensure_ascii=Fals
                   .replace("__BOOK__", BOOK_URL.replace('"', "")).replace("__OFF__", str(BOOK_OFFSET)))
 
 
+LIST_JS = r"""
+(function(){
+var ds=Array.prototype.slice.call(document.querySelectorAll('details.panel[data-k]'));
+function key(d){return 'wd-'+d.dataset.k;}
+ds.forEach(function(d){
+  try{var v=localStorage.getItem(key(d));if(v==='1')d.open=true;else if(v==='0')d.open=false;}catch(e){}
+  d.addEventListener('toggle',function(){try{localStorage.setItem(key(d),d.open?'1':'0');}catch(e){}});});
+function openFor(id){var t=document.getElementById(id);if(t&&t.tagName==='DETAILS')t.open=true;}
+Array.prototype.forEach.call(document.querySelectorAll('a[data-jump]'),function(a){
+  a.addEventListener('click',function(){openFor(a.dataset.jump);});});
+if(location.hash)openFor(location.hash.slice(1));
+var ex=document.getElementById('expall'),co=document.getElementById('colall');
+if(ex)ex.addEventListener('click',function(){ds.forEach(function(d){d.open=true;});});
+if(co)co.addEventListener('click',function(){ds.forEach(function(d){d.open=false;});});
+})();
+"""
+
 LOOKUP_JS = r"""
 (function(){
 var L=null,U=null,loading=false,pending=null;
@@ -1026,6 +1051,13 @@ header h1{margin:0;font-size:26px;letter-spacing:.3px}header p{margin:4px 0 0;op
 .hero-foot{text-align:center;font-size:12px;color:#5d6778;background:#eef8f2;padding:10px 16px;border-top:1px solid #d3eadc}
 /* panels */
 main{max-width:1240px;margin:18px auto;padding:0 20px;display:grid;gap:18px}
+.tile{display:block;text-decoration:none;color:inherit}a.tile:hover{box-shadow:0 2px 8px rgba(20,30,60,.16)}
+.panel summary.ph{cursor:pointer;list-style:none;display:block;padding:14px 18px 10px;position:relative}.panel summary.ph::-webkit-details-marker{display:none}
+.panel summary.ph::after{content:"\25b8";position:absolute;right:18px;top:14px;color:#8a93a5;font-size:16px;transition:transform .15s}.panel[open] summary.ph::after{transform:rotate(90deg)}
+.sh{display:block;font-size:17px;font-weight:700}.ssub{display:block;margin-top:3px;color:#5d6778;font-size:13px;padding-right:28px}
+.near .sh{color:#a87100}.watch .sh{color:#2469b4}.wait .sh{color:#7547b8}.skip .sh{color:#c2471f}.disc .sh{color:#5f6878}.susp .sh{color:#46546b}
+.listbar{max-width:1240px;margin:22px auto 0;padding:0 20px;display:flex;justify-content:space-between;align-items:center;font-size:14px}
+.listbar button{margin-left:8px;padding:5px 12px;border:1px solid #cfd6e3;border-radius:8px;background:#fff;color:#1d4f7a;font-weight:600;cursor:pointer;font-size:12px}
 .panel{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(20,30,60,.08);overflow:hidden;border-top:5px solid #999}
 .ph{padding:14px 18px 8px}.ph h2{margin:0;font-size:17px}.ph p{margin:3px 0 0;color:#5d6778;font-size:13px}
 .ph .count{background:#e9ecf2;color:#444;font-size:13px}
@@ -1049,6 +1081,7 @@ td .bdg{margin-left:6px;vertical-align:middle}
 .gauges summary{cursor:pointer;font-weight:600}.gauges ul{list-style:none;margin:8px 0 4px;padding:0}
 .gauges li{display:flex;justify-content:space-between;gap:12px;padding:5px 0 5px 12px;border-left:5px solid #b8bfcc;margin:3px 0}
 .gauges li.pos{border-color:#1f9d55}.gauges li.neg{border-color:#c0392b}.gauges li span{color:#5d6778;text-align:right}
+.gauges em.ours{font-style:normal;font-size:10px;font-weight:700;background:#e8eaef;color:#5d6778;border-radius:4px;padding:0 6px;margin-left:6px}
 .gnote{margin:6px 0 2px;font-size:11.5px;color:#8a93a5}
 .caution{margin:10px 32px 0;background:#fff3d6;border-left:5px solid #e6a100;border-radius:8px;padding:10px 14px;font-size:13px;color:#7a5300}
 .lookup{max-width:1040px;margin:18px auto 0;background:#fff;border-radius:14px;padding:16px 22px;box-shadow:0 1px 3px rgba(20,30,60,.08)}
