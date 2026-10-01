@@ -67,3 +67,4 @@ jobs:
           git add docs data
           git commit -m "Weekly screen $(date -u +%F)" || echo "no changes"
           git push
+
