@@ -14,16 +14,20 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else "weinstein_dashboard.html"
 e = html.escape
 
 
+def _bad(v):
+    return v is None or (isinstance(v, float) and v != v)
+
+
 def money(v):
-    return "–" if v is None else f"${v:,.2f}"
+    return "–" if _bad(v) else f"${v:,.2f}"
 
 
 def pct(v, sign=True):
-    return "–" if v is None else (f"{v:+.1f}%" if sign else f"{v:.1f}%")
+    return "–" if _bad(v) else (f"{v:+.1f}%" if sign else f"{v:.1f}%")
 
 
 def num(v, d=2):
-    return "–" if v is None else f"{v:.{d}f}"
+    return "–" if _bad(v) else f"{v:.{d}f}"
 
 
 def load():
@@ -35,21 +39,23 @@ def load():
 def badges(r):
     b = []
     sc = r.get("triple_score")
+    sc = None if _bad(sc) else int(sc)
     if sc == 3:
         b.append("<span class='bdg gold'>TRIPLE</span>")
     elif sc:
         b.append(f"<span class='bdg dim'>{sc}/3</span>")
-    if r.get("lr_virgin"):
+    if r.get("lr_virgin") is True:
         b.append("<span class='bdg gold'>A+ 10-YR HIGH</span>")
     return "".join(b)
 
 
 def long_range_line(r):
-    if r.get("lr_virgin"):
+    if r.get("lr_virgin") is True:
         return "Virgin territory: a new 10-year high, no overhead supply (p.99)."
     n = r.get("lr_near_years")
-    if n is None:
+    if _bad(n):
         return ""
+    n = int(n)
     if n == 0:
         return "No yearly high within 20% overhead on the 10-year view."
     return (f"{n} of the last {r.get('lr_years', 10)} yearly highs sit within 20% overhead "
@@ -58,8 +64,9 @@ def long_range_line(r):
 
 def triple_line(r):
     sc = r.get("triple_score")
-    if sc is None:
+    if _bad(sc):
         return ""
+    sc = int(sc)
     parts = [("volume", r.get("triple_vol")), ("RS turning positive", r.get("triple_rs")),
              ("40%+ run before breakout", r.get("triple_adv"))]
     met = ", ".join(n for n, v in parts if v) or "none"
@@ -113,8 +120,8 @@ def active_card(r, rules):
       <div class="abuy-sub">{e(r.get('group') or '')} · Stage 2 week {int(r['stage_weeks'])} ·
         RS {num(r['rs'],1)} · breakout volume {num(r.get('bo_vol_ratio') or r['vol_ratio_4wk'],1)}x{' (3-4 wk build-up)' if r.get('bo_buildup') else ''}</div>
       <div class="levels">
-        <div class="lv entry"><small>ENTRY</small><b>{money(lo)}</b>
-          <em>up to {money(hi)}</em></div>
+        <div class="lv entry"><small>ENTRY</small><b>{money(r['price']) if r['kind'] == 'pullback' else money(lo)}</b>
+          <em>{('zone ' + money(lo) + ' – ' + money(hi)) if r['kind'] == 'pullback' else 'up to ' + money(hi)}</em></div>
         <div class="lv stop"><small>STOP LOSS</small><b>{money(r['stop'])}</b>
           <em>{pct(r['risk_pct'])} from price</em></div>
       </div>
@@ -228,7 +235,7 @@ def build(d):
     grs = d.get("groups_rs") or {}
     groups = "".join(
         f"<span class='gc {'on' if s in (1, 2) else 'off'}'>{e(g)} <i>S{s if s else '?'}"
-        f"{'' if grs.get(g) is None else f' · RS {grs[g]:+.0f}'}</i></span>"
+        f"{'' if _bad(grs.get(g)) else f' · RS {grs[g]:+.0f}'}</i></span>"
         for g, s in sorted(d["groups"].items()))
     mk = d.get("market") or {}
     gl = "".join(

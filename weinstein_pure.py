@@ -1177,8 +1177,9 @@ def main():
             gma = infra.moving_average(f["Close"], cfg["ma_length"], cfg["ma_type"])
             groups[name] = int(classify(f, gma, cfg)[0].iloc[-1])
             try:
-                groups_rs[name] = round(float(infra.mansfield_rs(
-                    f["Close"], index_weekly["Close"], cfg["rs_length"]).iloc[-1]), 1)
+                _g = float(infra.mansfield_rs(
+                    f["Close"], index_weekly["Close"], cfg["rs_length"]).iloc[-1])
+                groups_rs[name] = None if math.isnan(_g) else round(_g, 1)
             except Exception:
                 groups_rs[name] = None
         except Exception:
