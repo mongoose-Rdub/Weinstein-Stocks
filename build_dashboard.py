@@ -325,7 +325,16 @@ def build(d):
         cov_txt = f" · {cv.get('analysed', 0):,} of {cv['universe']:,} US stocks analysed"
         if cv.get("ended_early"):
             cov_txt += " (price download ended early; partial coverage)"
-    gen = datetime.fromisoformat(d["generated"]).strftime("%b %d, %Y %I:%M %p")
+    _g = datetime.fromisoformat(d["generated"])
+    if _g.tzinfo is None:                      # older feeds were written in UTC on the runner
+        from datetime import timezone
+        _g = _g.replace(tzinfo=timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        _g = _g.astimezone(ZoneInfo("America/Chicago"))
+    except Exception:
+        pass
+    gen = _g.strftime("%b %d, %Y %I:%M %p ") + (_g.tzname() or "")
 
     hid = "<div class='note'>Hidden: the market is in Stage 4.</div>" if blocked else ""
     sections = [

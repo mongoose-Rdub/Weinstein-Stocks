@@ -1681,7 +1681,7 @@ def main():
         op, cl = compute_positions(parse_positions(txt), cfg, args.include_partial)
         bars = [r["last_bar"] for r in op if r.get("last_bar")]
         with open(args.positions_out, "w") as f:
-            _j.dump({"generated": _d.datetime.now().isoformat(timespec="minutes"),
+            _j.dump({"generated": _d.datetime.now(__import__("zoneinfo").ZoneInfo("America/Chicago")).isoformat(timespec="minutes"),
                      "last_bar": max(bars) if bars else "", "positions": op, "closed": cl},
                     f, indent=1, default=str)
         print(f"positions: {len(op)} open, {len(cl)} closed -> {args.positions_out}")
@@ -2016,7 +2016,7 @@ def main():
             "v": _r["verdict"]}
 
     _feed = {
-        "generated": _dt.datetime.now().isoformat(timespec="minutes"),
+        "generated": _dt.datetime.now(__import__("zoneinfo").ZoneInfo("America/Chicago")).isoformat(timespec="minutes"),
         "last_bar": str(index_weekly.index[-1].date()),
         "market_stage": mkt_stage, "market_blocked": bool(blocked),
         "groups": groups, "groups_rs": groups_rs, "favorable_groups": sorted(good),
