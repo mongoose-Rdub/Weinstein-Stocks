@@ -249,6 +249,80 @@ def res_cell(r):
     return f"<span class='chip {c}'>{e(n)}</span>"
 
 
+STAGE_COL = {1: "#8fb4d9", 2: "#1f9d55", 3: "#e6a100", 4: "#c0392b", 0: "#d5d9e2"}
+STAGE_TXT = {1: "basing", 2: "advancing", 3: "topping", 4: "declining"}
+
+
+def _arrow(v, unit=""):
+    if _bad(v):
+        return "<span class='fl'>\u2013</span>"
+    if abs(v) < 0.05:
+        return "<span class='fl'>\u25ac 0.0%s</span>" % unit
+    glyph = "\u25b2" if v > 0 else "\u25bc"
+    cls = "up" if v > 0 else "dn"
+    return "<span class='%s'>%s %+.1f%s</span>" % (cls, glyph, v, unit)
+
+
+def sector_panel(d):
+    """Sector history: stage strip, how long and what came before, relative
+    strength direction, and the share of the sector's stocks in Stage 2."""
+    gd = d.get("group_detail") or {}
+    if not gd:
+        return ""
+    order = sorted(gd, key=lambda g: (-(gd[g]["stage"] in (1, 2)), g))
+    rows = ""
+    for g in order:
+        x = gd[g]
+        st = int(x["stage"])
+        hist = x.get("hist") or []
+        n = len(hist)
+        cells = "".join(
+            f"<i style='background:{STAGE_COL.get(int(v), '#d5d9e2')}' "
+            f"title='{n - k - 1} wk ago: Stage {int(v) if v else '?'}'></i>"
+            for k, v in enumerate(hist))
+        w = int(x.get("weeks") or 0)
+        prev = x.get("prev_stage")
+        if x.get("move") == "warming":
+            tag = (f"<span class='mv warm'>Heating up</span> entered Stage {st} {w} wk ago"
+                   f"{f' (was {prev})' if prev else ''}")
+        elif x.get("move") == "cooling":
+            tag = (f"<span class='mv cool'>Cooling off</span> entered Stage {st} {w} wk ago"
+                   f"{f' (was {prev})' if prev else ''}")
+        else:
+            tag = f"In Stage {st} for {w} wk" + ("+" if w >= n and n else "")
+            if prev and w < n:
+                tag += f" (was {prev})"
+        b = x.get("breadth") or {}
+
+        def pc(v):
+            return "\u2013" if _bad(v) else f"{v:.0f}%"
+        bd = ""
+        if not _bad(b.get("now")):
+            delta = None if _bad(b.get("w4")) else b["now"] - b["w4"]
+            bd = (f"<b>{pc(b.get('now'))}</b> <small>(4 wk ago {pc(b.get('w4'))}, "
+                  f"13 wk ago {pc(b.get('w13'))})</small> {_arrow(delta, ' pts')}")
+        fav = st in (1, 2)
+        rs = "\u2013" if _bad(x.get("rs")) else f"{x['rs']:+.1f}"
+        rows += (f"<tr class='{'fav' if fav else 'unfav'}'><td class='sn'>{e(g)}</td>"
+                 f"<td><span class='sb' style='background:{STAGE_COL.get(st, '#999')}'>{st}</span></td>"
+                 f"<td><div class='strip'>{cells}</div></td><td>{tag}</td>"
+                 f"<td>{rs} <small>4w</small> {_arrow(x.get('rs_d4'))} <small>13w</small> {_arrow(x.get('rs_d13'))}</td>"
+                 f"<td>{bd}</td></tr>")
+    nweeks = len(next(iter(gd.values())).get("hist") or [])
+    return f"""
+<details class="sectors" open><summary>Sector history: heating up or cooling off</summary>
+<div class="scroll"><table class="stab"><thead><tr><th>Sector</th><th>Stage</th>
+<th>Last {nweeks} weeks (oldest to newest)</th><th>Where it stands</th><th>Relative strength vs S&amp;P (change)</th>
+<th>Stocks in Stage 2</th></tr></thead><tbody>{rows}</tbody></table></div>
+<p class="gnote"><i class="lg" style="background:{STAGE_COL[1]}"></i>1 basing
+<i class="lg" style="background:{STAGE_COL[2]}"></i>2 advancing
+<i class="lg" style="background:{STAGE_COL[3]}"></i>3 topping
+<i class="lg" style="background:{STAGE_COL[4]}"></i>4 declining. Sectors are judged by the stage and relative strength of a
+sector fund (p.78); several stocks in one group turning bullish together is a group signal (p.80). "Heating up" and "cooling off"
+mean a stage change in the last 8 weeks toward or away from Stage 2; that window is not from the book. Stock counts use the
+sector labels each stock carries, which are less reliable outside the S&amp;P 1500.</p></details>"""
+
+
 def build(d):
     near_cols = [
         ("Ticker", tk), ("Price", lambda r: money(r["price"])),
@@ -390,6 +464,7 @@ def build(d):
 <div class="mkt {mcls}"><b>S&amp;P 500: {mtxt}</b>
   <span>{'Buying suspended: the book says do not buy into a bearish market.' if blocked else 'Market trend permits buying.'}</span></div>
 <div class="groups"><small>SECTORS</small>{groups}</div>
+{sector_panel(d)}
 {gauge_html}
 <div class="tiles">{tile_html}</div>
 {lookup_html}
@@ -593,6 +668,10 @@ RULE_NOTES = {
  "78": [
   "The sector",
   "Concentrate on the groups with the best technical picture. A strong group helps; a weak one hurts."
+ ],
+ "80": [
+  "Group signal",
+  "When several stocks in one group suddenly turn bullish (or bearish) on the charts, that is a clear signal about the group itself."
  ],
  "98": [
   "Overhead supply",
@@ -989,6 +1068,12 @@ td .bdg{margin-left:6px;vertical-align:middle}
 .pg{color:#1d4f7a;border-bottom:1px dotted #1d4f7a;cursor:pointer;white-space:nowrap}.pg:hover,.pg:focus{background:#e8f0f8;outline:none}
 #pgpop{position:absolute;z-index:50;max-width:320px;background:#fff;border:1px solid #cfd6e3;border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(20,30,60,.22);font-size:12.5px;line-height:1.4;color:#1c2333}
 #pgpop[hidden]{display:none}.pgh{display:block;color:#0f2a4a;margin-bottom:3px}.pgt{margin:0}.pgl{display:inline-block;margin-top:8px;font-weight:700;color:#1d4f7a}
+.sectors{margin:12px 32px 0;background:#fff;border-radius:10px;padding:8px 14px;box-shadow:0 1px 3px rgba(20,30,60,.08);font-size:13px}.sectors summary{cursor:pointer;font-weight:600}
+.stab{border-collapse:collapse;width:100%;margin-top:8px}.stab th{font-size:10.5px;padding:6px 10px;background:#f7f8fb;white-space:nowrap}.stab td{padding:6px 10px;border-top:1px solid #edf0f5;white-space:nowrap;vertical-align:middle}
+.stab tr.unfav td{opacity:.75}.stab .sn{font-weight:700}.sb{display:inline-block;min-width:22px;text-align:center;color:#fff;border-radius:5px;font-weight:800;padding:1px 6px}
+.strip{display:flex;gap:1px}.strip i{display:block;width:7px;height:16px;border-radius:1px}.lg{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
+.mv{font-weight:800;font-size:11px;border-radius:5px;padding:1px 6px;margin-right:4px}.mv.warm{background:#dff3e6;color:#17683a}.mv.cool{background:#fde4e1;color:#a52a1d}
+.up{color:#17883f;font-weight:700}.dn{color:#c0392b;font-weight:700}.fl{color:#8a93a5}
 .exitplan{margin:8px 0 0;font-size:12.5px;background:#fff;border:1px solid #cfe7d8;border-radius:8px;padding:6px 10px}
 .exitplan summary{cursor:pointer;font-weight:700;color:#157a41}.exitplan p{margin:6px 0;color:#3b4456}
 .pos-wrap{max-width:1040px;margin:18px auto;padding:0 20px}.pos-h{margin:0 0 10px;font-size:20px}.pos-sub{font-size:12px;font-weight:400;color:#6b7689;margin-left:8px}

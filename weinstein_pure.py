@@ -207,6 +207,10 @@ CFG = {
     "trader_correction_pct": 0.07, # "corrections of less than 7 percent" are ignored (p.195)
     "trail_recover_frac": 0.5,     # "back toward the prior high" = half way (p.184); same reading as the buy side
     "stage3_investor_sell_frac": "half",      # p.36-37
+
+    # ---- sector history on the dashboard (p.78-80) ----
+    "sector_hist_weeks": 26,       # weeks of stage history shown per sector; OURS
+    "sector_turn_weeks": 8,        # a stage change this recent is "heating up"/"cooling off"; OURS
 }
 
 BUY_VERDICTS = {"BREAKOUT - BUY", "CONTINUATION - BUY", "PULLBACK - BUY"}
@@ -884,6 +888,67 @@ def position_status(pos, weekly, ma, stages, cfg):
     }
 
 
+def sector_history(stages, rs_series, close, ma, cfg):
+    """History for one sector fund: its stage week by week, how long it has been
+    in the current stage, what came before, and which way relative strength is
+    moving. The book judges a group by its stage and relative strength (p.78)
+    and calls several stocks in one group turning bullish together "a clear-cut
+    group signal" (p.80); this just lays those facts out over time."""
+    n = cfg["sector_hist_weeks"]
+    arr = [int(v) if v == v else 0 for v in stages.to_numpy()]
+    if not arr:
+        return None
+    cur = arr[-1]
+    weeks = 1
+    i = len(arr) - 2
+    while i >= 0 and arr[i] == cur:
+        weeks += 1
+        i -= 1
+    prev = arr[i] if i >= 0 else 0
+    warming = {(4, 1), (1, 2), (3, 2), (4, 2)}
+    cooling = {(2, 3), (3, 4), (2, 4), (1, 4)}
+    move = None
+    if weeks <= cfg["sector_turn_weeks"] and prev:
+        move = "warming" if (prev, cur) in warming else "cooling" if (prev, cur) in cooling else None
+
+    def at(series, back):
+        try:
+            v = float(series.iloc[-1 - back])
+            return None if v != v else round(v, 1)
+        except Exception:
+            return None
+    rs_now = at(rs_series, 0)
+    r4, r13 = at(rs_series, 4), at(rs_series, 13)
+    pct_ma = None
+    try:
+        pct_ma = round((float(close.iloc[-1]) / float(ma.iloc[-1]) - 1) * 100, 1)
+    except Exception:
+        pass
+    return {"hist": arr[-n:], "stage": cur, "weeks": weeks, "prev_stage": prev or None,
+            "move": move, "rs": rs_now,
+            "rs_d4": None if rs_now is None or r4 is None else round(rs_now - r4, 1),
+            "rs_d13": None if rs_now is None or r13 is None else round(rs_now - r13, 1),
+            "pct_above_ma": pct_ma}
+
+
+def sector_breadth(df_all, names):
+    """Share of each sector's stocks that are in Stage 2 now, 4 weeks ago and 13
+    weeks ago (p.80: several stocks in one group turning bullish together)."""
+    out = {}
+    for g in names:
+        sub = df_all[df_all["group"] == g]
+        row = {"n": int(len(sub))}
+        for key, col in (("now", "stage"), ("w4", "stage_prev4"), ("w13", "stage_prev13")):
+            if col not in sub.columns:
+                row[key] = None
+                continue
+            v = pd.to_numeric(sub[col], errors="coerce")
+            v = v[v > 0]
+            row[key] = round(float((v == 2).mean() * 100), 1) if len(v) >= 5 else None
+        out[g] = row
+    return out
+
+
 POSITION_COLS = ["ticker", "buy_date", "buy_price", "style", "stop", "sell_date", "sell_price"]
 
 
@@ -1182,6 +1247,8 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "price": round(price, 2),
         "stage": stage,
         "stage_weeks": dur,
+        "stage_prev4": (int(stages.iloc[-5]) if len(stages) > 5 and stages.iloc[-5] == stages.iloc[-5] else None),
+        "stage_prev13": (int(stages.iloc[-14]) if len(stages) > 14 and stages.iloc[-14] == stages.iloc[-14] else None),
         "base_weeks_before": base_weeks_before,
         "after_advance": bool(after_advance),
         "ma30": round(float(ma.iloc[-1]), 2),
@@ -1748,6 +1815,7 @@ def main():
     # ---- 2. "Uncover the few groups that look best technically." ----
     groups = {}
     groups_rs = {}
+    gdetail = {}
     gdata = yf.download(list(infra.SECTOR_ETFS.values()), period="4y",
                         interval="1wk", group_by="ticker",
                         auto_adjust=True, progress=False)
@@ -1755,13 +1823,20 @@ def main():
         try:
             f = infra._extract_ticker_frame(gdata, etf).dropna()
             gma = infra.moving_average(f["Close"], cfg["ma_length"], cfg["ma_type"])
-            groups[name] = int(classify(f, gma, cfg)[0].iloc[-1])
+            _gst = classify(f, gma, cfg)[0]
+            groups[name] = int(_gst.iloc[-1])
+            _grs = None
             try:
-                _g = float(infra.mansfield_rs(
-                    f["Close"], index_weekly["Close"], cfg["rs_length"]).iloc[-1])
+                _grs = infra.mansfield_rs(f["Close"], index_weekly["Close"], cfg["rs_length"])
+                _g = float(_grs.iloc[-1])
                 groups_rs[name] = None if math.isnan(_g) else round(_g, 1)
             except Exception:
                 groups_rs[name] = None
+            try:
+                if _grs is not None:
+                    gdetail[name] = sector_history(_gst, _grs, f["Close"], gma, cfg)
+            except Exception as exc:
+                print(f"  sector history skipped for {name}: {exc}", file=sys.stderr)
         except Exception:
             groups[name] = None
     good = {g for g, s in groups.items() if s in (1, 2)}
@@ -2028,11 +2103,14 @@ def main():
             "r": _clean(_r["trail_stop_pct"] if _b == "NEAR MISS" else _r["stop_pct"]),
             "v": _r["verdict"]}
 
+    _bre = sector_breadth(df_all, [g for g in groups if groups.get(g) is not None])
+    _group_detail = {g: dict(gdetail[g], **{"breadth": _bre.get(g)}) for g in gdetail if gdetail[g]}
     _feed = {
         "generated": _dt.datetime.now(__import__("zoneinfo").ZoneInfo("America/Chicago")).isoformat(timespec="minutes"),
         "last_bar": str(index_weekly.index[-1].date()),
         "market_stage": mkt_stage, "market_blocked": bool(blocked),
         "groups": groups, "groups_rs": groups_rs, "favorable_groups": sorted(good),
+        "group_detail": _group_detail,
         "market": {"gauges": gauges,
                    "pos": sum(g["status"] == "pos" for g in gauges),
                    "neg": sum(g["status"] == "neg" for g in gauges),

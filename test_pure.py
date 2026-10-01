@@ -550,6 +550,32 @@ assert not _miss, _miss
 assert "p.139" not in _src, "the 'don't buy' list is on printed page 129"
 ok(f"{len(_toks)} cited pages all have notes; no stale p.139 references")
 
+print("\n12f. Sector history")
+idxs=pd.date_range("2024-01-05",periods=60,freq="W-FRI")
+stg_s=pd.Series([4]*20+[1]*20+[2]*15+[3]*5,index=idxs)
+rs_s=pd.Series(np.linspace(-5,5,60),index=idxs); cl_s=pd.Series(np.linspace(80,120,60),index=idxs)
+ma_s=cl_s.rolling(30,min_periods=1).mean()
+sh=W.sector_history(stg_s,rs_s,cl_s,ma_s,W.CFG)
+assert sh["stage"]==3 and sh["weeks"]==5 and sh["prev_stage"]==2 and sh["move"]=="cooling", sh
+assert len(sh["hist"])==W.CFG["sector_hist_weeks"] and sh["hist"][-1]==3 and sh["rs_d4"] is not None and sh["rs_d4"]>0, sh
+st2=pd.Series([1]*50+[2]*6,index=idxs[:56]); sh2=W.sector_history(st2,rs_s.iloc[:56],cl_s.iloc[:56],ma_s.iloc[:56],W.CFG)
+assert sh2["move"]=="warming" and sh2["weeks"]==6 and sh2["prev_stage"]==1, sh2
+st3=pd.Series([2]*60,index=idxs); sh3=W.sector_history(st3,rs_s,cl_s,ma_s,W.CFG)
+assert sh3["move"] is None and sh3["weeks"]==60, sh3
+ok("stage run length, previous stage, warming/cooling and RS change are read correctly")
+dfb=pd.DataFrame({"group":["Tech"]*10+["Energy"]*3,"stage":[2]*6+[1]*4+[2]*3,
+                  "stage_prev4":[2]*3+[1]*7+[2]*3,"stage_prev13":[1]*10+[2]*3})
+br=W.sector_breadth(dfb,["Tech","Energy","Utility"])
+assert br["Tech"]["now"]==60.0 and br["Tech"]["w4"]==30.0 and br["Tech"]["w13"]==0.0, br
+assert br["Energy"]["now"] is None and br["Utility"]["n"]==0, br          # fewer than 5 stocks: no percentage
+ok("share of a sector's stocks in Stage 2 now, 4 and 13 weeks ago; thin sectors report none")
+import build_dashboard as _BD2
+_d={"group_detail":{"Tech":dict(sh2,breadth=br["Tech"]),"Energy":dict(sh,breadth=br["Energy"])}}
+_h=_BD2.sector_panel(_d)
+assert "Heating up" in _h and "Cooling off" in _h and "strip" in _h and "Stocks in Stage 2" in _h, _h[:200]
+assert _BD2.sector_panel({})=="" and _BD2.sector_panel({"group_detail":{}})==""
+ok("sector panel renders heating up / cooling off tags and the strips; older feeds render without it")
+
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize
