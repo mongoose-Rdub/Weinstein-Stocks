@@ -523,6 +523,20 @@ ph=W.position_status({"ticker":"AAA","buy_date":wdn.index[41].date(),"buy_price"
 assert ph["status"]=="SELL - STOP HIT" and ph["hit"], ph
 ok("a breached stop is reported as a sell")
 
+# light-volume breakout (p.116): sell on the first rally, dump if it falls back under the breakout
+pl=np.concatenate([np.full(60,10.0)+0.2*np.sin(np.arange(60)),np.linspace(10.6,12.5,8)])
+wl=frame(pl); ml=W.infra.moving_average(wl["Close"],30,"SMA")
+sl=np.concatenate([np.full(60,1),np.full(8,2)])
+bl=W.position_status({"ticker":"LV","buy_date":wl.index[60].date(),"buy_price":10.6,"style":"investor"},wl,ml,sl,W.CFG)
+assert bl["status"]=="SELL ON FIRST RALLY", bl["status"]
+wl2=wl.copy(); wl2.iloc[-1,wl2.columns.get_loc("Close")]=9.8; wl2.iloc[-1,wl2.columns.get_loc("Low")]=9.7
+bl2=W.position_status({"ticker":"LV","buy_date":wl2.index[60].date(),"buy_price":10.6,"style":"investor"},wl2,ml,sl,W.CFG)
+assert bl2["status"] in ("SELL - FAILED BREAKOUT","SELL - STOP HIT"), bl2["status"]
+hv=wl["Volume"].copy(); hv.iloc[60]=6e6; wl3=wl.assign(Volume=hv)
+bl3=W.position_status({"ticker":"LV","buy_date":wl3.index[60].date(),"buy_price":10.6,"style":"investor"},wl3,ml,sl,W.CFG)
+assert bl3["status"]!="SELL ON FIRST RALLY", bl3["status"]
+ok("light-volume breakout: sell on first rally / dump if it falls back; heavy volume is not flagged")
+
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize

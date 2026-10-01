@@ -806,6 +806,12 @@ def position_status(pos, weekly, ma, stages, cfg):
         if i in sched:
             cur = max(cur, sched[i])
     last_stage = int(stv[-1]) if len(stv) else 0
+    # a young Stage 2 whose breakout lacked the volume (p.104, p.116)
+    recent_bo = bool(stage_at_buy == 2 and start > cfg["vol_base_weeks"] and n - 1 - start <= 12
+                     and last_stage == 2)
+    bo_heavy = True
+    if recent_bo:
+        bo_heavy = bool(heavy_volume(weekly["Volume"].to_numpy(dtype=float), start, cfg)["heavy"])
     ma_now = float(ma.iloc[-1])
     ext = (price / ma_now - 1) * 100 if ma_now else float("nan")
     sw = swing_target(weekly, start, price, cfg) if start > 0 else None
@@ -837,6 +843,13 @@ def position_status(pos, weekly, ma, stages, cfg):
     elif trader and price < ma_now:
         status = "SELL - BELOW 30-WK MA"
         notes.append("A trader never stays with a stock that closes under its 30-week average, even by a fraction (p.196).")
+    elif (not trader and recent_bo and not bo_heavy and bo_level and price < bo_level):
+        status = "SELL - FAILED BREAKOUT"
+        notes.append("Breakout on light volume that has fallen back under the breakout point: dump it (p.116).")
+    elif recent_bo and not bo_heavy:
+        status = "SELL ON FIRST RALLY"
+        notes.append("The breakout did not have the required volume. The book: sell the stock on the first rally, "
+                     "and dump it at once if it falls back below the breakout point (p.116).")
     elif trader and bo_level and price < bo_level and (buy_i >= start) and n - 1 - start <= 12:
         status = "SELL - BACK UNDER BREAKOUT"
         notes.append("Great trades rarely drop back below the breakout point (p.208).")
