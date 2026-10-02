@@ -63,7 +63,8 @@ jobs:
           age = (d.date.today() - last).days
           cv = f.get("coverage", {})
           print("last bar", last, "age days", age, "screened", f["screened"], "coverage", cv)
-          assert age <= 6, "stale data"
+          # last Friday's bar is 7 days old on a Friday morning, before that day's close
+          assert age <= 7, "stale data"
           assert cv.get("analysed", 0) >= 0.5 * max(cv.get("universe", 1), 1), \
               "fewer than half the universe was analysed (Yahoo and Stooq both throttled?)"
           PY
