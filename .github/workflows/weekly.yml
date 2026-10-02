@@ -17,6 +17,8 @@ jobs:
   screen:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    env:
+      HAS_MAIL: ${{ secrets.MAIL_PASSWORD != '' && secrets.MAIL_USERNAME != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -86,3 +88,21 @@ jobs:
           import json, os
           print(json.dumps({"content": f"Weinstein dashboard updated, week ending {os.environ['WEEK']}: {os.environ['PAGE']}"}))
           PY
+
+      - name: Email me the dashboard link (every run, manual or automatic)
+        if: always() && env.HAS_MAIL == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.mail.me.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Weinstein Dashboard <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_USERNAME }}
+          subject: "Weinstein screen: ${{ job.status }} (${{ github.event_name == 'schedule' && 'automatic' || 'manual' }} run)"
+          body: |
+            Run result: ${{ job.status }}
+            Trigger: ${{ github.event_name == 'schedule' && 'automatic Friday run' || 'manual run' }}
+
+            Dashboard: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+            Run log:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
