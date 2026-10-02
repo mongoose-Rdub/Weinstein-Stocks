@@ -74,8 +74,8 @@ jobs:
           git pull --rebase
           git push
 
-      - name: Post the link to Discord
-        if: success()
+      - name: Post the link to Discord (automatic Friday run only, never manual test runs)
+        if: success() && github.event_name == 'schedule'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
