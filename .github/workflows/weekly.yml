@@ -77,6 +77,18 @@ jobs:
           git pull --rebase
           git push
 
+      - name: Wait until the new dashboard is actually live (Pages needs a minute or two)
+        if: success()
+        run: |
+          PAGE="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+          WANT=$(python -c "import json;print(json.load(open('weinstein_feed.json'))['generated'])")
+          for i in $(seq 1 30); do
+            GOT=$(curl -fsS "${PAGE}weinstein_feed.json?cb=$(date +%s)" | python -c "import sys,json;print(json.load(sys.stdin).get('generated',''))" 2>/dev/null || true)
+            if [ "$GOT" = "$WANT" ]; then echo "Live after about $((i*20)) seconds"; sleep 60; exit 0; fi
+            sleep 20
+          done
+          echo "::warning::Could not confirm the page is live after 10 minutes; continuing anyway"
+
       - name: Post the link to Discord (automatic Friday run only, never manual test runs)
         if: success() && github.event_name == 'schedule'
         env:
