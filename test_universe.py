@@ -128,3 +128,18 @@ for _n in ("Cantor Equity Partners V, Inc. Class A Ordinary Shares","Foo Acquisi
            "Acme Corp 6.5% Notes due 2030","XYZ 7.25% Fixed Rate Cumulative Preferred"):
     assert _rx.search(_n.lower()), _n
 print("  [OK] ADRs and names containing 'right'/'unit' are kept; warrants, rights, units, preferreds, notes dropped")
+
+print("\nA Friday bar cached before the close is refreshed, not trusted")
+_store = {"AAA": frame("2026-10-02"), "BBB": frame("2026-10-02")}
+_fetched = []
+def _dl(batch, period):
+    _fetched.extend(batch)
+    return {t: (None, frame("2026-10-02", n=60)) for t in batch}
+_close = uf.market_close_epoch(TODAY)
+_written = {"AAA": _close - 6 * 3600, "BBB": _close + 600}      # morning vs just after the close
+_st = uf.ensure_prices(["AAA", "BBB"], today=TODAY, dl_yahoo=_dl, dl_stooq=lambda b, p: {},
+                       load=lambda t: _store.get(t), save=lambda t, d: _store.__setitem__(t, d),
+                       sleep=lambda s: None, written_at=lambda t: _written.get(t))
+assert _fetched == ["AAA"], _fetched
+assert _st["current"] == 1 and _st["incremental"] == 1
+print("  [OK] morning-cached Friday bar is refetched; one written after the close is kept")

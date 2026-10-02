@@ -262,9 +262,27 @@ class Throttle:
         return self.backoff * random.uniform(0.8, 1.2)
 
 
+def market_close_epoch(day):
+    """4:15 pm New York on `day` (the 4:00 close plus 15 minutes to settle), as epoch seconds."""
+    from zoneinfo import ZoneInfo
+    return datetime(day.year, day.month, day.day, 16, 15,
+                    tzinfo=ZoneInfo("America/New_York")).timestamp()
+
+
+def _cache_written_at(ticker):
+    try:
+        return os.path.getmtime(infra._cache_file(ticker))
+    except OSError:
+        return None
+
+
 def ensure_prices(tickers, today=None, time_budget_min=240, dl_yahoo=None, dl_stooq=None,
-                  load=None, save=None, sleep=time.sleep, now=time.time):
+                  load=None, save=None, sleep=time.sleep, now=time.time, written_at=None):
     """Bring every ticker's cached daily history up to the last completed Friday.
+
+    A cached Friday bar only counts as complete if the file was written after
+    that Friday's close. A Friday-morning run caches a half-day bar; without this
+    check a later run would see "has Friday's bar" and never refresh it.
 
     Returns a stats dict. dl_* take (tickers, period) and return
     {ticker: (weekly, daily)}; they are injectable for testing."""
@@ -272,7 +290,9 @@ def ensure_prices(tickers, today=None, time_budget_min=240, dl_yahoo=None, dl_st
     dl_stooq = dl_stooq or (lambda b, p: infra._download_batch_stooq(b, p, True))
     load = load or (lambda t: _load_any_age(t))
     save = save or infra.save_cached
+    written_at = written_at or _cache_written_at
     target = last_friday(today)
+    close_ts = market_close_epoch(target)
     deadline = now() + time_budget_min * 60
 
     current, incr, full = [], [], []
@@ -281,7 +301,11 @@ def ensure_prices(tickers, today=None, time_budget_min=240, dl_yahoo=None, dl_st
         if df is None or df.empty:
             full.append(t)
         elif df.index[-1].date() >= target:
-            current.append(t)
+            w = written_at(t)
+            if w is not None and w < close_ts and len(df) > 300:
+                incr.append(t)            # Friday bar may be a partial day: refresh it
+            else:
+                current.append(t)
         elif (target - df.index[-1].date()).days <= 120 and len(df) > 300:
             incr.append(t)
         else:
