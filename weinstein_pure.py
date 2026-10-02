@@ -1249,13 +1249,16 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
             weekly["Low"].iloc[max(0, start - cfg["base_window"]):start]
         base_floor = float(pre.min()) if len(pre) else float(weekly["Low"].min())
     # --- triple-confirmation pattern (p.150-152): flag only ---
-    triple = {"triple_vol": None, "triple_rs": None, "triple_adv": None, "triple_score": None}
+    triple = {"triple_vol": None, "triple_rs": None, "triple_adv": None, "triple_score": None,
+              "triple_follow": None, "triple_rs_before": None, "triple_adv_pct": None}
     if stage == 2 and bo_i >= cfg["vol_base_weeks"]:
         nb = cfg["vol_base_weeks"]
         pre = float(np.mean(vol_arr[bo_i - nb:bo_i]))
         follow_ok = True
+        follow_ratio = None
         if dur > 1 and pre > 0:
-            follow_ok = float(np.mean(vol_arr[bo_i + 1:])) / pre >= cfg["triple_follow_mult"]
+            follow_ratio = float(np.mean(vol_arr[bo_i + 1:])) / pre
+            follow_ok = follow_ratio >= cfg["triple_follow_mult"]
         t_vol = bool(bo_v["spike"] and follow_ok and not vol_verify)
         rs_b = float(rs_series.iloc[bo_i - 1]) if bo_i - 1 < len(rs_series) else np.nan
         t_rs = bool(not np.isnan(rs_b) and not np.isnan(rs) and rs_b <= cfg["triple_rs_before_max"]
@@ -1263,7 +1266,11 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         t_adv = bool(base_floor > 0 and bo_level > 0
                      and (bo_level / base_floor - 1) * 100 >= cfg["triple_prior_advance_pct"])
         triple = {"triple_vol": t_vol, "triple_rs": t_rs, "triple_adv": t_adv,
-                  "triple_score": int(t_vol) + int(t_rs) + int(t_adv)}
+                  "triple_score": int(t_vol) + int(t_rs) + int(t_adv),
+                  "triple_follow": None if follow_ratio is None else round(follow_ratio, 2),
+                  "triple_rs_before": None if np.isnan(rs_b) else round(rs_b, 1),
+                  "triple_adv_pct": (round((bo_level / base_floor - 1) * 100, 1)
+                                     if base_floor > 0 and bo_level > 0 else None)}
 
     stop_base = book_stop(base_floor, cfg["stop_tick"])
     stop_cons = book_stop(cons_low, cfg["stop_tick"])
@@ -2108,6 +2115,7 @@ def main():
                 "range_weeks", "range_width_pct", "pct_above_breakout", "breakout_level",
                 "shares", "avg_dollar_vol_m", "adv_dollars", "liq", "vol_verify", "stop_basis", "bo_vol_ratio", "bo_buildup",
                 "triple_vol", "triple_rs", "triple_adv", "triple_score", "rs_at_peak",
+                "triple_follow", "triple_rs_before", "triple_adv_pct",
                 "base_weeks_before", "range_bottom", "group_stage", "ma30", "pct_above_ma",
                 "trader_stop", "trader_stop_pct", "swing_target", "swing_gain_pct",
                 "swing_peak", "swing_low", "swing_cleared", "overextended")}

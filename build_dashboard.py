@@ -42,20 +42,99 @@ def load():
 
 
 # ---------------------------------------------------------------- helpers
+def _badge(cls, label, title, lines):
+    """A badge that opens a popup (click, tap, hover or Enter) explaining it for THIS stock.
+    The popup text lives in data-tip: first line is the heading, the rest are paragraphs."""
+    tip = "\n".join([title] + [x for x in lines if x])
+    return (f"<span class='bdg {cls}' tabindex='0' role='button' "
+            f"data-tip=\"{e(tip, quote=True)}\">{e(label)}</span>")
+
+
+def _mk(ok):
+    return "✓" if ok else "✗"
+
+
+def triple_tip(r, sc):
+    """Explain the triple-confirmation score with this stock's own numbers (p.150-152)."""
+    ln = []
+    # 1. volume
+    bv, fol = r.get("bo_vol_ratio"), r.get("triple_follow")
+    tv = bool(r.get("triple_vol"))
+    t = f"{_mk(tv)} Volume: "
+    t += (f"the breakout week traded {num(bv, 1)}x the prior four weeks (the book wants about 2x or more)."
+          if not _bad(bv) else "breakout volume could not be measured.")
+    if not _bad(fol):
+        t += (f" Since the breakout, volume has averaged {num(fol, 1)}x the pre-breakout level "
+              f"(we want 1.5x or more; that follow-through number is ours).")
+    if r.get("vol_verify") is True:
+        t += " Not counted: the volume reading is extreme and may be a data artifact."
+    ln.append(t)
+    # 2. relative strength
+    rb, rn = r.get("triple_rs_before"), r.get("rs")
+    trs = bool(r.get("triple_rs"))
+    t = f"{_mk(trs)} Relative strength: "
+    if trs:
+        t += (f"it was {num(rb, 1)} just before the breakout (negative or hugging zero, as the book describes) "
+              f"and is now {num(rn, 1)}, moving decisively positive.")
+    elif _bad(rb) or _bad(rn):
+        t += "not enough data to judge."
+    elif rb > 3:
+        t += (f"it was already {num(rb, 1)} before the breakout. The book wants a stock whose RS was "
+              f"negative or near zero and then turned up (we accept up to +3).")
+    elif rn <= 0:
+        t += f"it was {num(rb, 1)} before the breakout and is {num(rn, 1)} now, so it has not turned positive yet."
+    else:
+        t += f"it was {num(rb, 1)} before the breakout and is {num(rn, 1)} now, not clearly rising."
+    ln.append(t)
+    # 3. prior advance
+    ap = r.get("triple_adv_pct")
+    tad = bool(r.get("triple_adv"))
+    t = f"{_mk(tad)} Prior advance: "
+    t += (f"price rose {num(ap, 0)}% from the base floor to the breakout level "
+          f"(the book looks for some 40 to 50 percent or more)." if not _bad(ap)
+          else "the size of the run could not be measured.")
+    ln.append(t)
+    ln.append("From the book's triple-confirmation pattern (p.150-152). It is a bonus signal, not a buy rule: "
+              "it does not decide whether a stock qualifies.")
+    if sc == 3:
+        ln.append("With all three, the book says to invest much more heavily (p.157).")
+    return f"Triple confirmation: {sc} of 3", ln
+
+
 def badges(r):
     b = []
     sc = r.get("triple_score")
     sc = None if _bad(sc) else int(sc)
-    if sc == 3:
-        b.append("<span class='bdg gold'>TRIPLE</span>")
-    elif sc:
-        b.append(f"<span class='bdg dim'>{sc}/3</span>")
+    if sc:
+        title, lines = triple_tip(r, sc)
+        b.append(_badge("gold" if sc == 3 else "dim", "TRIPLE" if sc == 3 else f"{sc}/3", title, lines))
     if r.get("lr_virgin") is True:
-        b.append("<span class='bdg gold'>A+ 10-YR HIGH</span>")
+        yrs = r.get("lr_years")
+        b.append(_badge("gold", "A+ 10-YR HIGH", "A+ 10-year high",
+                        [f"{r.get('ticker', 'This stock')} is at a new 10-year high"
+                         + (f" (checked over {int(yrs)} yearly highs)" if not _bad(yrs) else "") + ".",
+                         "With no price history above it, there is no overhead supply: nobody is sitting on "
+                         "losses waiting to sell at a higher price (p.99)."]))
     if r.get("vol_verify") is True:
-        b.append("<span class='bdg thin' title='Breakout volume is extreme (20x+); possible split or corporate-event artifact. Check the chart.'>VERIFY VOLUME</span>")
-    if r.get("liq") in ("thin", "very thin"):
-        b.append(f"<span class='bdg thin'>{'VERY THIN' if r['liq'] == 'very thin' else 'THIN'}</span>")
+        bv = r.get("bo_vol_ratio")
+        b.append(_badge("thin", "VERIFY VOLUME", "Verify the volume",
+                        [(f"Breakout volume was {num(bv, 0)}x normal, far outside the ordinary "
+                          f"(we flag anything over 20x)." if not _bad(bv) else
+                          "Breakout volume is extreme (we flag anything over 20x)."),
+                         "That is often a split, a listing event or bad data rather than real buying. "
+                         "Look at the weekly chart before trusting this stock's volume.",
+                         "While flagged, the volume tests are not counted toward the triple check."]))
+    lq = r.get("liq")
+    if lq in ("thin", "very thin"):
+        adv = r.get("avg_dollar_vol_m")
+        very = lq == "very thin"
+        b.append(_badge("thin", "VERY THIN" if very else "THIN",
+                        "Very thinly traded" if very else "Thinly traded",
+                        [(f"About ${num(adv, 2)}M traded per day on average." if not _bad(adv) else ""),
+                         "Orders can move the price and a stop can fill well below its level, so keep the "
+                         "position small. The example size is capped at about 5% of average daily volume "
+                         "when that is smaller than 1/15 of the account.",
+                         "For buys, the book uses a wider limit on thinly traded stocks (p.66)."]))
     return "".join(b)
 
 
@@ -922,14 +1001,32 @@ function show(b){
   pop.style.left=x+"px";pop.style.top=(r.bottom+window.scrollY+6)+"px";pop.dataset.for=k;
 }
 function hide(){pop.hidden=true;}
+var tipN=0;
+function showTip(b){
+  if(!b.dataset.tid)b.dataset.tid='t'+(++tipN);
+  var L=b.dataset.tip.split("\n");
+  pop.textContent="";
+  pop.appendChild(el('b','pgh',L[0]));
+  for(var i=1;i<L.length;i++)pop.appendChild(el('p','pgt pgp',L[i]));
+  pop.hidden=false;
+  var r=b.getBoundingClientRect(),pw=pop.offsetWidth,x=Math.min(Math.max(8,r.left+window.scrollX),window.scrollX+document.documentElement.clientWidth-pw-8);
+  pop.style.left=x+"px";pop.style.top=(r.bottom+window.scrollY+6)+"px";pop.dataset.for=b.dataset.tid;
+}
 document.addEventListener('click',function(ev){
   var b=ev.target.closest&&ev.target.closest('.pg');
   if(b){ev.preventDefault();if(!pop.hidden&&pop.dataset.for===b.dataset.k)hide();else show(b);return;}
+  var t=ev.target.closest&&ev.target.closest('.bdg[data-tip]');
+  if(t){ev.preventDefault();if(!pop.hidden&&pop.dataset.for===t.dataset.tid)hide();else showTip(t);return;}
   if(!ev.target.closest('#pgpop'))hide();});
 document.addEventListener('keydown',function(ev){
   if(ev.key==='Escape')hide();
-  if((ev.key==='Enter'||ev.key===' ')&&ev.target.classList&&ev.target.classList.contains('pg')){ev.preventDefault();show(ev.target);}});
-document.addEventListener('mouseover',function(ev){var b=ev.target.closest&&ev.target.closest('.pg');if(b&&window.matchMedia('(hover:hover)').matches)show(b);});
+  if((ev.key==='Enter'||ev.key===' ')&&ev.target.classList){
+    if(ev.target.classList.contains('pg')){ev.preventDefault();show(ev.target);}
+    else if(ev.target.classList.contains('bdg')&&ev.target.dataset.tip){ev.preventDefault();showTip(ev.target);}}});
+document.addEventListener('mouseover',function(ev){
+  if(!window.matchMedia('(hover:hover)').matches)return;
+  var b=ev.target.closest&&ev.target.closest('.pg');if(b){show(b);return;}
+  var t=ev.target.closest&&ev.target.closest('.bdg[data-tip]');if(t)showTip(t);});
 var timer=null;
 function run(){timer=null;link(document.body);}
 new MutationObserver(function(){if(!timer)timer=setTimeout(run,60);}).observe(document.body,{childList:true,subtree:true});
@@ -1078,6 +1175,8 @@ footer h3{margin:0 0 6px;font-size:14px;color:#1c2333}.disc{font-size:11.5px;col
 .bdgs{margin:4px 0 0}.bdg{display:inline-block;border-radius:5px;padding:1px 7px;margin:0 4px 2px 0;font-size:10px;font-weight:800;letter-spacing:.6px}
 .bdg.gold{background:#ffe9a8;color:#7a5300}.bdg.dim{background:#e8eaef;color:#6b7689}.bdg.thin{background:#fde4e1;color:#a52a1d}
 td .bdg{margin-left:6px;vertical-align:middle}
+.bdg[data-tip]{cursor:help}.bdg[data-tip]:hover,.bdg[data-tip]:focus{outline:2px solid #1d4f7a;outline-offset:1px}
+.pgp{margin:6px 0 0}#pgpop{max-width:360px}
 .how.sm{font-size:12px;color:#5d6778}
 .gauges{margin:12px 32px 0;background:#fff;border-radius:10px;padding:8px 14px;box-shadow:0 1px 3px rgba(20,30,60,.08);font-size:13px}
 .gauges summary{cursor:pointer;font-weight:600}.gauges ul{list-style:none;margin:8px 0 4px;padding:0}

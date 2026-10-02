@@ -622,6 +622,18 @@ assert ' id="sec-near" data-k="sec-near" open>' in _pg and ' id="sec-wait" data-
 assert "data-jump='sec-near'" in _pg
 ok("market, scorecard, buys, positions, lookup, sectors, gauges, then six collapsible lists; near misses and watchlist open by default")
 
+print("\n12i. Badges explain themselves with the stock's own numbers")
+_r={"ticker":"TST","triple_score":1,"triple_vol":False,"triple_rs":True,"triple_adv":False,"bo_vol_ratio":1.5,
+    "triple_rs_before":-1.2,"rs":18.0,"triple_adv_pct":22.0,"liq":"very thin","avg_dollar_vol_m":0.04,
+    "lr_virgin":True,"vol_verify":True}
+_b=_BD2.badges(_r)
+for _s in ("data-tip=","Triple confirmation: 1 of 3","✗ Volume: the breakout week traded 1.5x","✓ Relative strength: it was -1.2",
+           "price rose 22%","Very thinly traded","$0.04M","new 10-year high","Verify the volume"):
+    assert _s in _b, _s
+assert "title=" not in _b and "tabindex='0'" in _b
+assert "showTip" in _BD2.PAGE_JS
+ok("1/3, TRIPLE, A+ 10-YR HIGH, THIN and VERIFY VOLUME badges carry per-stock popups (click, tap, hover, keyboard)")
+
 # strip docstrings and comments, then confirm none of the borrowed logic is
 # actually executed anywhere in this module
 import ast, io, tokenize
