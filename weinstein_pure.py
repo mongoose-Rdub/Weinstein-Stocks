@@ -1489,6 +1489,13 @@ def verdict(m, cfg):
     pb_quiet = (vp <= cfg["pullback_vol_peak_max"]) if vp is not None else quiet
     if pb is not None and pb_quiet:
         if -cfg["pullback_below"] <= pb <= cfg["pullback_band"]:
+            # The pullback buy is for a breakout that came on heavy volume: "If
+            # volume is favorable on the breakout and contracts on the decline,
+            # buy your other half ... on a pullback" (p.115); "If the volume
+            # pattern is negative (not high enough on breakout), sell the stock
+            # on the first rally" (p.116). Only judged when the breakout week is known.
+            if m.get("bo_heavy") is False:
+                return "SUSPECT - LOW VOLUME BREAKOUT"
             return "PULLBACK - BUY"
 
     return "STAGE 2 - HOLD"

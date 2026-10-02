@@ -241,6 +241,10 @@ EXCLUDE_NAME_REGEX = (
     r"\b1/\d+(th)?\b", r"% note", r"\bnotes? due\b", r"\bdebentures?\b",
     r"\bsenior notes?\b", r"\bsubordinated\b", r"\bconvertible\b",
     r"\bwhen issued\b", r"\btest stock\b",
+    # blank-check shells (SPACs): their price is pinned to the cash in trust, so
+    # a "Stage 2 breakout" is meaningless. Not from the book; OURS.
+    r"\bacquisition (corp|corporation|co|company|holdings?|ltd|limited|inc)\b",
+    r"\bblank check\b", r"\bcantor equity partners\b",
 )
 EXCLUDE_NAME_PATTERNS = EXCLUDE_NAME_REGEX      # kept for older imports
 

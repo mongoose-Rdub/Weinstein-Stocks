@@ -122,7 +122,8 @@ for _n in ("Nokia Corporation Sponsored American Depositary Shares","Wright Medi
            "Bright Horizons Family Solutions Inc. - Common Stock","Copyright Clearance Center Common Stock",
            "Toyota Motor Corporation American Depositary Shares","ASML Holding N.V. - New York Registry Shares"):
     assert not _rx.search(_n.lower()), _n
-for _n in ("Acme Corp Warrants","Acme Corp Rights","Acme Acquisition Corp Units",
+for _n in ("Cantor Equity Partners V, Inc. Class A Ordinary Shares","Foo Acquisition Corp. Class A Common Stock",
+           "Acme Corp Warrants","Acme Corp Rights","Acme Acquisition Corp Units",
            "Bank of X Depositary Shares, each representing a 1/40th interest in a share of 5.5% Series B Preferred Stock",
            "Acme Corp 6.5% Notes due 2030","XYZ 7.25% Fixed Rate Cumulative Preferred"):
     assert _rx.search(_n.lower()), _n

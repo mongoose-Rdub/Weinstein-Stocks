@@ -165,6 +165,10 @@ assert W.verdict(m(stage_weeks=6,new_high=False,vol_ratio_4wk=0.6,vol_vs_peak=0.
 assert W.verdict(m(stage_weeks=6,new_high=False,vol_ratio_4wk=0.6,vol_vs_peak=0.30,pct_above_breakout=-1.),cfg)=="STAGE 2 - HOLD"
 assert W.verdict(m(stage_weeks=6,new_high=False,vol_ratio_4wk=0.6,vol_vs_peak=0.80,pct_above_breakout=-1.),cfg)=="STAGE 2 - HOLD"
 ok("pullback needs volume down over 75% from the breakout peak (p.105)")
+# p.115-116: a pullback buy follows a HEAVY-volume breakout; a weak one is a sell on the first rally
+assert W.verdict(m(stage_weeks=20,new_high=False,vol_ratio_4wk=0.6,vol_vs_peak=0.20,pct_above_breakout=-1.,bo_heavy=False),cfg)=="SUSPECT - LOW VOLUME BREAKOUT"
+assert W.verdict(m(stage_weeks=20,new_high=False,vol_ratio_4wk=0.6,vol_vs_peak=0.20,pct_above_breakout=-1.,bo_heavy=True),cfg)=="PULLBACK - BUY"
+ok("no pullback buy after a breakout without the volume surge (p.115-116)")
 
 print("\n9d. Real base length and wide-stop flag")
 p=list(np.linspace(90,50,30))+[48,52]*60
