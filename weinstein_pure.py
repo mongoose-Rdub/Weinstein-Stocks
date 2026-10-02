@@ -1688,22 +1688,35 @@ def headline(bucket, m, checks):
     return "Not a candidate right now."
 
 
-def completed_weekly(daily, include_partial=False, today=None):
+def completed_weekly(daily, include_partial=False, today=None, session_open=None):
     """Weekly bars from daily data, dropping a week still in progress.
 
     Weinstein works from weekly charts and closes. A bar that is only Mon-Wed
     has a fraction of a week's volume, which makes every stock look like it is
     trading on dried-up volume and makes a 2x breakout impossible to see.
+
+    On Friday itself the week is complete only after the close: before then the
+    Friday bar is a partial day, so it is dropped too. `session_open` is worked
+    out from the New York clock unless a caller (the tests) supplies it.
     """
     wk = infra._to_weekly(daily)
     if include_partial or wk.empty:
         return wk
-    today = pd.Timestamp.today().normalize() if today is None else pd.Timestamp(today)
+    if today is None:
+        now_et = pd.Timestamp.now(tz="America/New_York")
+        today = now_et.tz_localize(None).normalize()
+        if session_open is None:
+            # 4:00 pm close plus 15 minutes for the final prints to settle
+            session_open = (now_et.hour * 60 + now_et.minute) < (16 * 60 + 15)
+    else:
+        today = pd.Timestamp(today)
     label = wk.index[-1]                     # the Friday that ends this bar
     last = daily.index[-1].normalize()
     holiday_week = last.weekday() == 3 and today > last   # Thursday, Friday closed
     if last < label and today <= label and not holiday_week:
         wk = wk.iloc[:-1]
+    elif last == label and today == label and session_open:
+        wk = wk.iloc[:-1]                    # Friday's bar, market still open
     return wk
 
 

@@ -348,6 +348,12 @@ d2=pd.bdate_range("2026-08-03","2026-10-02")         # full week ends Fri
 assert W.completed_weekly(pd.DataFrame({"Open":1.,"High":1.,"Low":1.,"Close":1.,"Volume":100.},index=d2),today="2026-10-03").index[-1]==pd.Timestamp("2026-10-02")
 d3=pd.bdate_range("2026-03-02","2026-04-02")         # Good Friday: ends Thu
 assert W.completed_weekly(pd.DataFrame({"Open":1.,"High":1.,"Low":1.,"Close":1.,"Volume":100.},index=d3),today="2026-04-03").index[-1]==pd.Timestamp("2026-04-03")
+_fri=pd.DataFrame({"Open":1.,"High":1.,"Low":1.,"Close":1.,"Volume":100.},index=d2)
+# Friday itself: a bar for today exists but the market is still open -> last Friday's week
+assert W.completed_weekly(_fri,today="2026-10-02",session_open=True).index[-1]==pd.Timestamp("2026-09-25")
+# after the close the same bar is the finished week
+assert W.completed_weekly(_fri,today="2026-10-02",session_open=False).index[-1]==pd.Timestamp("2026-10-02")
+ok("Friday-morning run does not treat the partial Friday bar as a finished week")
 ok("Mon-Wed run uses last Friday; complete and holiday weeks are kept")
 
 print("\n11. Breakout volume: the book's two tests (p.104), judged on the breakout week")
