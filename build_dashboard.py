@@ -230,8 +230,219 @@ def profit_plan(r):
             f"<p>{inv}</p><p>{trd}</p></details>")
 
 
+# ------------------------------------------------- green / yellow assessment
+# Every number here is OURS, not the book's. They only decide how much caution to show
+# on a stock that has ALREADY passed the book's buy rules. Green is never a recommendation.
+SIG = {
+    "overhead_pct": 10.0,        # a swing high this close overhead is worth a look even when rated light
+    "yearly_highs": 3,           # this many of the last ~11 yearly highs sitting within 20% overhead
+    "jump_pct": 10.0,            # a one-week move at least this big...
+    "jump_vol_x": 8.0,           # ...on volume at least this many times the prior 4 weeks: check the news
+    "wide_stop_pct": 12.0,       # stop this far away (the hard limit is 15%)
+    "heavy_weeks": 8,            # weeks inside the overhead band that make supply "heavy" (cfg base_min_weeks)
+}
+
+
+def assess(r, d):
+    """Return {'level': 'green'|'yellow', 'flags': [(title, text)]} for one active buy."""
+    f = []
+    rp, lvl = r.get("resistance_pct"), r.get("resistance_level")
+    near = r.get("lr_near_years")
+    if (not _bad(rp) and not _bad(lvl) and rp <= SIG["overhead_pct"]) or \
+            (not _bad(near) and near >= SIG["yearly_highs"]):
+        bits = []
+        if not _bad(rp) and not _bad(lvl) and rp <= SIG["overhead_pct"]:
+            wo = r.get("resistance_weeks_over")
+            bits.append(f"a swing high at {money(lvl)} is only {num(rp, 1)}% above price"
+                        + (f" and the stock has traded {int(wo)} weeks inside that band"
+                           f" ({SIG['heavy_weeks']} or more would count as heavy and remove it from the list)"
+                           if not _bad(wo) and wo else ""))
+        if not _bad(near) and near >= SIG["yearly_highs"]:
+            bits.append(f"{int(near)} of the last {int(r.get('lr_years') or 10)} yearly highs sit within 20% overhead"
+                        f" (nearest {money(r.get('lr_near_level'))})")
+        risk = r.get("risk_pct")
+        txt = "; ".join(bits).capitalize() + "."
+        if not _bad(rp) and not _bad(risk) and rp <= SIG["overhead_pct"]:
+            txt += (f" The room up to that level ({num(rp, 1)}%) is about the size of the risk to the stop "
+                    f"({num(abs(risk), 1)}%). The book wants room to run (p.115).")
+        f.append(("Overhead supply", txt))
+    lq = r.get("liq")
+    if lq in ("thin", "very thin"):
+        f.append(("Thin trading",
+                  f"About ${num(r.get('avg_dollar_vol_m'), 2)}M traded per day. Orders can move the price and a stop "
+                  f"can fill well below its level, so keep the position small."))
+    wk, vx = r.get("wk_chg_pct"), r.get("vol_ratio_4wk")
+    if r.get("vol_verify") is True:
+        f.append(("Extreme volume", "Breakout volume is far outside the ordinary and may be a split, listing event "
+                                    "or data artifact. Check the chart and the news."))
+    elif not _bad(wk) and not _bad(vx) and wk >= SIG["jump_pct"] and vx >= SIG["jump_vol_x"]:
+        f.append(("Unusual week",
+                  f"Last week the stock moved {num(wk, 1)}% on about {num(vx, 0)}x its normal volume. "
+                  f"A jump that size can mean news (earnings, a takeover offer). Check the news before acting."))
+    if r.get("kind") != "pullback" and not _bad(r.get("entry_low")) and not _bad(r.get("price")):
+        limit = r["entry_low"] * (1.0417 if lq in ("thin", "very thin") else 1.0208)
+        if r["price"] > limit:
+            f.append(("Order already behind price",
+                      f"Price ({money(r['price'])}) is above the buy limit on the card ({money(limit)}), so that "
+                      f"order would not fill as written. The do-not-chase ceiling is {money(r.get('entry_high'))}."))
+    risk = r.get("risk_pct")
+    if not _bad(risk) and abs(risk) >= SIG["wide_stop_pct"]:
+        f.append(("Wide stop", f"The stop is {num(abs(risk), 1)}% below price. That passes the 15% limit, but it is "
+                               f"a lot of room to give up."))
+    gs = r.get("group_stage")
+    if not _bad(gs) and int(gs) == 1:
+        grs = (d.get("groups_rs") or {}).get(r.get("group"))
+        f.append(("Sector still basing",
+                  f"{r.get('group') or 'The sector'} is in Stage 1 (basing), not yet advancing"
+                  + (f", with relative strength {num(grs, 1)}" if not _bad(grs) else "")
+                  + ". The book prefers stocks in groups that are already in Stage 2 (p.78-80)."))
+    rs = r.get("rs")
+    if not _bad(rs) and rs <= 0:
+        f.append(("Weak relative strength", f"Relative strength is {num(rs, 1)}, not positive."))
+    if r.get("overextended") is True:
+        f.append(("Extended", f"The stock is {num(r.get('pct_above_ma'), 0)}% above its 30-week average, "
+                              f"where the book says to lock in profits rather than add (p.193)."))
+    if (d.get("market") or {}).get("caution"):
+        f.append(("Market evidence is mixed", "More of the market gauges are negative than positive right now."))
+    level = "yellow" if f else "green"
+    ids = book_ideals(r, d)
+    n = sum(1 for x in ids if x["ok"])
+    return {"level": level, "flags": f, "ideals": ids, "n_ideals": n, "star": n >= STAR_MIN}
+
+
+STAR_MIN = 3        # the gold star: at least this many of the five book ideals (ours; historically 3 shows on ~2 in 5 cards)
+
+
+def book_ideals(r, d):
+    """The five marks of quality the book describes, each met or not for THIS stock, with its own numbers.
+    This is guidance only: it never changes whether a stock is an active buy."""
+    fresh = (d.get("rules") or {}).get("fresh_weeks", 2)
+    sw, ts, gs = r.get("stage_weeks"), r.get("triple_score"), r.get("group_stage")
+    near, rsv = r.get("lr_near_years"), r.get("rs")
+    note = str(r.get("resistance_note") or "")
+    out = []
+    fb = r.get("verdict") == "BREAKOUT - BUY" and not _bad(sw) and sw <= fresh
+    out.append({"label": "Fresh breakout", "ok": fb, "basis": "p.14, p.35, p.59",
+                "detail": (f"Breaking out of its Stage 1 base in Stage 2 week {int(sw)}: the investor's ideal entry."
+                           if fb else
+                           f"Not a fresh breakout ({(r.get('verdict') or '').title().replace(' - ', ' ')}, Stage 2 week "
+                           f"{int(sw) if not _bad(sw) else '?'}). Later entries are real buys, just not the textbook one.")})
+    t3 = not _bad(ts) and int(ts) == 3
+    out.append({"label": "Triple confirmation 3/3", "ok": t3, "basis": "p.150-152, p.157",
+                "detail": (f"All three signs together (heavy volume, RS turning positive, a 40%+ swing before the breakout): "
+                           f"the book's pattern for big winners, strictly for aggressive investors."
+                           if t3 else
+                           f"Scores {int(ts) if not _bad(ts) else 'n/a'} of 3. The 3/3 pattern is rare (about 2% of buys).")})
+    s2 = not _bad(gs) and int(gs) == 2
+    out.append({"label": "Sector in Stage 2", "ok": s2, "basis": "p.80, p.91",
+                "detail": (f"{r.get('group') or 'The sector'} is already advancing: an A+ stock in an A+ group."
+                           if s2 else
+                           f"{r.get('group') or 'The sector'} is in Stage {int(gs) if not _bad(gs) else '?'}"
+                           " (acceptable, not Stage 3 or 4, but not yet advancing).")})
+    clr = note.startswith("clear") and not _bad(near) and near == 0
+    out.append({"label": "Clear overhead", "ok": clr, "basis": "p.98-100",
+                "detail": ("No meaningful resistance within 20% overhead and no yearly highs just above: room to run."
+                           if clr else
+                           f"Overhead supply: {note or 'resistance not rated'}"
+                           + (f"; {int(near)} yearly high(s) within 20% above" if not _bad(near) and near else
+                              ("" if not _bad(near) else "; 10-year history unavailable"))
+                           + ".")})
+    pos = not _bad(rsv) and rsv > 0
+    out.append({"label": "Positive relative strength", "ok": pos, "basis": "p.110-113, p.115",
+                "detail": (f"Relative strength is {num(rsv, 1)}, ahead of the market."
+                           if pos else
+                           f"Relative strength is {num(rsv, 1) if not _bad(rsv) else 'n/a'}: not yet positive "
+                           "(allowed if improving, but not ideal).")})
+    return out
+
+
+def ideals_chip(a):
+    n = a["n_ideals"]
+    lines = [f"{n} of the book's 5 marks of quality are met for this stock. These describe how close it is to the "
+             f"textbook best; every stock listed has already passed all the buy rules."]
+    for x in a["ideals"]:
+        lines.append(f"{'✓' if x['ok'] else '✗'} {x['label']} ({x['basis']}): {x['detail']}")
+    lines.append("Historically, signals meeting 3 of 5 did slightly better than those meeting 2 (a small gap), and 5 of 5 "
+                 "almost never occurs. This is a guide, not a prediction or a recommendation.")
+    return _badge("ideals", f"IDEALS {n}/5", f"Book ideals: {n} of 5", lines)
+
+
+def star_badge(a):
+    """The big gold star: at least STAR_MIN of the five ideals."""
+    n = a["n_ideals"]
+    lines = [f"{n} of the book's 5 marks of quality are met (the star needs {STAR_MIN} or more):"]
+    lines += [f"{'✓' if x['ok'] else '✗'} {x['label']} ({x['basis']})" for x in a["ideals"]]
+    lines += ["The star is a strong-setup marker among stocks that already passed every buy rule. The threshold of 3 is ours. "
+              "It is not a recommendation: confirm on the weekly chart and check the news."]
+    return _badge("starbig", "★", f"STRONG SETUP: {n} of 5 book ideals", lines)
+
+
+def signal_chip(a):
+    """The green / yellow chip. Its popup explains the color for this stock."""
+    n = len(a["flags"])
+    if a["level"] == "green":
+        title = "Clean setup: no flags"
+        lines = ["Every buy rule passed and none of our caution checks fired for this stock."]
+        label = "CLEAN SETUP"
+    else:
+        title = f"Check first: {n} flag{'s' if n != 1 else ''}"
+        lines = [f"⚠ {t}: {x}" for t, x in a["flags"]]
+        label = f"CHECK FIRST · {n}"
+    lines += [
+        "Passed the book's buy rules: Stage 2 above a rising 30-week average, breakout volume, no heavy overhead "
+        "resistance within 20%, stop within 15%, and sector and market not in decline.",
+        "Before acting, confirm on the weekly chart (is the base orderly? did the breakout bar close near its "
+        "high? any gap?) and check the news. Neither color is a recommendation to buy.",
+        "The flag thresholds (such as 10% overhead or a 12% stop) are our additions, not the book's.",
+    ]
+    return _badge("sig " + a["level"], label, title, lines)
+
+
+def analysis_prompt(r, d, a):
+    """A ready-to-paste prompt: this stock's screen results plus the rules, for any AI the reader uses."""
+    rules = d["rules"]
+    mk = d.get("market") or {}
+    gl = "; ".join(f"{g['name']}: {g['detail']}" for g in mk.get("gauges", [])[:8])
+    grs = (d.get("groups_rs") or {}).get(r.get("group"))
+    t = r.get("ticker")
+    L = [
+        f"I'm checking {t} against Stan Weinstein's method ('Secrets for Profiting in Bull and Bear Markets'). "
+        f"A screener flagged it as an active buy. I'm attaching a WEEKLY chart screenshot with a 30-week simple "
+        f"moving average and Mansfield relative strength.",
+        "",
+        f"SCREEN RESULTS FOR {t} (data through the {d.get('last_bar')} weekly close):",
+        f"- Setup: {r.get('verdict')}; sector {r.get('group')} is in Stage {r.get('group_stage')}"
+        + (f" with relative strength {num(grs, 1)}" if not _bad(grs) else ""),
+        f"- Price {money(r.get('price'))}; Stage 2 for {int(r['stage_weeks'])} weeks; stock RS {num(r.get('rs'), 1)}",
+        f"- Entry {money(r.get('entry_low'))} to {money(r.get('entry_high'))}; stop {money(r.get('stop'))} "
+        f"({pct(r.get('risk_pct'))} from price)",
+        f"- Breakout volume {num(r.get('bo_vol_ratio'), 1)}x the prior 4 weeks; this week's volume "
+        f"{num(r.get('vol_ratio_4wk'), 1)}x; last week's price change {pct(r.get('wk_chg_pct'))}",
+        f"- Overhead resistance: {r.get('resistance_note')}; {long_range_line(r)}",
+        f"- Average daily dollar volume about ${num(r.get('avg_dollar_vol_m'), 2)}M (liquidity: {r.get('liq')})",
+        f"- Triple-confirmation: {num(r.get('triple_score'), 0)} of 3 (volume {r.get('triple_vol')}, "
+        f"RS turn {r.get('triple_rs')}, prior 40%+ run {r.get('triple_adv')})",
+        f"- Market gauges: {gl or 'n/a'}",
+        f"- Screener caution flags: " + ("; ".join(f"{x}: {y}" for x, y in a["flags"]) or "none"),
+        "",
+        "THE RULES THE SCREEN USED: Stage 2 means price above a rising 30-week average; breakout volume at least "
+        f"{rules['breakout_vol_mult']:.0f}x the prior 4 weeks; no heavy overhead resistance within "
+        f"{rules['resistance_near_pct']:.0f}%; stop within {rules['wide_stop_pct']:.0f}% of entry; don't chase more "
+        f"than {rules['max_chase_pct']:.0f}% above the breakout; pullback buys need volume down more than 75% from "
+        "the breakout peak; sector and market not in Stage 3 or 4.",
+        "",
+        "PLEASE: (1) say what the chart shows and whether it confirms or contradicts each screen result above; "
+        "(2) describe the base (tight or sloppy), how the breakout bar closed, any gaps, and the volume pattern; "
+        "(3) point out anything the screen could not know and I should check, such as news; (4) list what would "
+        "make this a 'wait' instead of a buy, and where the stop and the first overhead obstacle sit; (5) give a "
+        "plain, balanced analysis against Weinstein's rules. Do not invent data you cannot see in the screenshot. "
+        "This is for my own research, not personalized financial advice.",
+    ]
+    return "\n".join(L)
+
+
 # ---------------------------------------------------------------- cards
-def active_card(r, rules):
+def active_card(r, rules, d=None):
     lo, hi = r["entry_low"], r["entry_high"]
     if r["kind"] == "pullback":
         how = (f"Buy on the pullback, inside <b>{money(lo)} – {money(hi)}</b>. "
@@ -252,11 +463,18 @@ def active_card(r, rules):
                   "Investors buy half at the breakout and half on the pullback if volume "
                   "contracts (p.59); traders buy it all (p.59)."))
     per = rules["account_size"] / rules["positions"]
+    asm = assess(r, d or {"rules": rules}) if d is not None else \
+        {"level": "green", "flags": [], "ideals": [], "n_ideals": 0, "star": False}
+    star = bool(asm.get("star"))
+    sig = signal_chip(asm) if d is not None else ""
+    cp = (f"<button type='button' class='cpbtn' data-prompt=\"{e(analysis_prompt(r, d, asm), quote=True)}\">"
+          f"Copy analysis prompt</button>") if d is not None else ""
     return f"""
-    <div class="abuy">
+    <div class="abuy sg-{asm['level']}{' star' if star else ''}">
+      {star_badge(asm) if star else ''}
       <div class="abuy-top"><span class="tk">{e(r['ticker'])}</span>
         <span class="tag">{label}</span></div>
-      <div class="bdgs">{badges(r)}</div>
+      <div class="bdgs">{sig}{ideals_chip(asm) if asm.get("ideals") else ''}{badges(r)}</div>
       <div class="abuy-sub">{e(r.get('group') or '')} · Stage 2 week {int(r['stage_weeks'])} ·
         RS {num(r['rs'],1)} · breakout volume {num(r.get('bo_vol_ratio') or r['vol_ratio_4wk'],1)}x{' (3-4 wk build-up)' if r.get('bo_buildup') else ''}</div>
       <div class="levels">
@@ -274,6 +492,7 @@ def active_card(r, rules):
       <p class="size">Example size: {int(r['shares'])} sh ≈ ${r['shares'] * r['price']:,.0f}
         (1/{rules['positions']} of ${rules['account_size']:,.0f}{', capped at ~5% of average daily volume' if r.get('liq') in ('thin', 'very thin') else ''})
         · avg volume ${(r.get('adv_dollars') or 0) / 1e6:,.2f}M/day · resistance: {e(r['resistance_note'])}</p>
+      <p class="cprow">{cp}<span class="cphint">Paste it with your own weekly chart screenshot into any AI to get a write-up.</span></p>
     </div>"""
 
 
@@ -289,7 +508,7 @@ def active_panel(d):
                 "<p>Nothing meets every rule. Patience is a position. "
                 "Check the near misses below.</p></div>")
     else:
-        body = f"<div class='abuys'>{''.join(active_card(r, rules) for r in a)}</div>"
+        body = f"<div class='abuys'>{''.join(active_card(r, rules, d) for r in a)}</div>"
     return f"""
   <section class="hero" id="active">
     <div class="hero-head"><span class="dot"></span>ACTIVE BUYS
@@ -298,6 +517,174 @@ def active_panel(d):
     <div class="hero-foot">Stop within {rules['wide_stop_pct']:.0f}% of entry ·
       breakout volume ≥ {rules['breakout_vol_mult']:.0f}x · no heavy resistance within
       {rules['resistance_near_pct']:.0f}% · group and market not in decline</div>
+  </section>"""
+
+
+# ---------------------------------------------------------------- market playbook
+REGIME_ORDER = ["bull", "high_risk", "defensive", "bear", "low_risk"]
+REGIME_RULE = {
+    "bull": "S&P 500 in Stage 2, and more long-term gauges positive than negative.",
+    "high_risk": "S&P 500 in Stage 3, or in Stage 2 with more gauges negative than positive.",
+    "defensive": "S&P 500 or the Dow in Stage 4, without the rest of the evidence being clearly bearish.",
+    "bear": "S&P 500 in Stage 4, the Dow also in Stage 4, and more gauges negative than positive.",
+    "low_risk": "S&P 500 in Stage 1 (basing).",
+}
+
+
+try:
+    from weinstein_pure import REGIMES as REGIMES_TXT
+except Exception:
+    REGIMES_TXT = {}
+
+
+def playbook_panel(d):
+    rg = d.get("regime")
+    if not rg:
+        return ""
+    blocked = d.get("market_blocked")
+    nact = 0 if blocked else len(d.get("active", []))
+    nsh = len(d.get("shorts", []))
+    hid = (d.get("short_hidden") or {}).get("candidates", 0) + (d.get("short_hidden") or {}).get("watch", 0)
+    ev = (f"S&P 500 Stage {rg.get('sp_stage') or '?'} · Dow Stage {rg.get('dow_stage') or '?'} · "
+          f"long-term gauges {rg.get('gauges_pos', 0)} positive, {rg.get('gauges_neg', 0)} negative")
+    rows = [("Buying", rg["buys"]), ("Short selling", rg["shorts"]), ("What you own", rg["held"])]
+    if rg.get("cash"):
+        rows.append(("Cash", rg["cash"]))
+    grid = "".join(f"<div class='pbr'><small>{e(k)}</small><span>{e(v)}</span></div>" for k, v in rows)
+    here = (f"On this page: {nact} active buy{'s' if nact != 1 else ''}"
+            + (" (buying suspended)" if blocked else "")
+            + f"; {nsh} short candidate{'s' if nsh != 1 else ''}"
+            + (f" ({hid} more hidden because short selling is the exception in this market)" if hid and rg["key"] != "bear" else "")
+            + ".")
+    allr = ""
+    for k in REGIME_ORDER:
+        r = REGIMES_TXT.get(k)
+        if not r:
+            continue
+        cur = " cur" if k == rg["key"] else ""
+        allr += (f"<li class='{k}{cur}'><b>{e(r['name'])}</b>{' <em>(now)</em>' if cur else ''}"
+                 f"<span>How it is recognized: {e(REGIME_RULE[k])}</span>"
+                 f"<span>Buying: {e(r['buys'])}</span><span>Short selling: {e(r['shorts'])}</span>"
+                 f"<span>Stocks you own: {e(r['held'])}</span></li>")
+    return f"""
+<section class="playbook pb-{rg['key']}" id="playbook">
+  <div class="pbh"><small>MARKET PLAYBOOK</small><b>{e(rg['name'])}</b></div>
+  <p class="pbs">{e(rg['summary'])} <span class="pbe">{e(ev)}</span></p>
+  <div class="pbg">{grid}</div>
+  <p class="pbf">{e(here)} <span>{e(rg['pages'])}</span></p>
+  <details class="pball"><summary>All the market conditions and what the book does in each</summary><ul>{allr}</ul>
+    <p class="gnote">The regime is read from the S&amp;P 500 and Dow stages and the balance of the long-term gauges
+    (the book's "weight of the evidence", p.268-270). The cutoffs between regimes follow the book's wording; where the book
+    gives no exact number the rule is ours. Not a recommendation.</p></details>
+</section>"""
+
+
+# ---------------------------------------------------------------- short candidates
+def short_marks_chip(r):
+    mk = r.get("sh_marks") or {}
+    n = int(r.get("sh_marks_n") or 0)
+    lines = [f"{n} of 5 'A+ short' marks. Every candidate here already passed the book's hard rules; these marks "
+             "separate the A+ shorts from the merely OK ones (p.234-239)."]
+    for k, v in mk.items():
+        lines.append(f"{'✓' if v else '✗'} {k}")
+    for lab, state, det, pg in (r.get("sh_checks") or []):
+        lines.append(f"{'✓' if state == 'pass' else '⚠' if state == 'warn' else '✗'} {lab} ({pg}): {det}")
+    lines.append("Volume is not needed on the breakdown: a stock can fall of its own weight (p.236-237).")
+    lines.append("Not checked: short interest. The book warns against 'sucker shorts' whose short interest is 5 times "
+                 "the average daily volume or more (p.222); look that up before acting.")
+    return _badge("ideals", f"A+ MARKS {n}/5", f"A+ short marks: {n} of 5", lines)
+
+
+def short_card(r, rules, d):
+    kind = r.get("sh_kind")
+    label = {"breakdown": "SHORT ON BREAKDOWN", "pullback": "SHORT ON PULLBACK",
+             "continuation": "CONTINUATION SHORT", "watch": "WATCH: TOP FORMING"}.get(kind, "SHORT")
+    sup, es, el = r.get("sh_support"), r.get("sh_entry_stop"), r.get("sh_entry_limit")
+    if kind == "breakdown":
+        entry_b = money(es)
+        entry_s = f"sell short stop {money(es)}, limit {money(el)}"
+        how = (f"Support at <b>{money(sup)}</b> has broken. Enter an order to sell short with a stop at <b>{money(es)}</b> and a "
+               f"limit of <b>{money(el)}</b>: at least a half point of room, more for thin stocks (p.239-240). Traders sell the whole "
+               "position on the breakdown; investors sell half now and half on a pullback toward the breakdown level (p.229-230).")
+    elif kind == "pullback":
+        entry_b = money(r.get("price"))
+        entry_s = f"zone {money(r.get('sh_zone_lo'))} – {money(r.get('sh_zone_hi'))}"
+        how = (f"The stock has rallied back toward its breakdown level at <b>{money(sup)}</b>. This is the second half of an "
+               f"investor's short, or a later entry inside {money(r.get('sh_zone_lo'))} – {money(r.get('sh_zone_hi'))} (p.230).")
+    elif kind == "continuation":
+        entry_b = money(es)
+        entry_s = f"sell short stop {money(es)}"
+        how = (f"After consolidating under its declining average, the stock is breaking to a new low below <b>{money(sup)}</b>. "
+               f"Sell short with a stop at <b>{money(es)}</b>. This is for aggressive traders (p.240).")
+    else:
+        entry_b = money(es)
+        entry_s = f"only if it breaks {money(sup)}"
+        how = (f"A Stage 3 top is forming with a flat or falling average. On the shopping list (p.229-230): sell short only if it "
+               f"breaks below support at <b>{money(sup)}</b> (stop at <b>{money(es)}</b>). Not a short yet.")
+    per = rules["account_size"] / rules["positions"]
+    ent = r.get("sh_entry") or r.get("price")
+    shares = int(per / ent) if ent else 0
+    tgt = (f"<p class='how sm'>Downside swing-rule target {money(r.get('sh_target'))} ({pct(r.get('sh_target_pct'))}). "
+           "When it nears the target, cover half and trail the rest with the buy-stop (p.247-249).</p>") if r.get("sh_target") else ""
+    return f"""
+    <div class="abuy shortc">
+      <div class="abuy-top"><span class="tk">{e(r['ticker'])}</span><span class="tag">{label}</span></div>
+      <div class="bdgs">{short_marks_chip(r)}</div>
+      <div class="abuy-sub">{e(r.get('group') or '')} · Stage {int(r['stage'])} week {int(r['stage_weeks'])} ·
+        RS {num(r.get('rs'), 1)} · run-up before the top {num(r.get('sh_runup_pct'), 0)}%</div>
+      <div class="levels">
+        <div class="lv entry"><small>SELL SHORT</small><b>{entry_b}</b><em>{e(entry_s)}</em></div>
+        <div class="lv stop"><small>PROTECTIVE BUY-STOP</small><b>{money(r.get('sh_buy_stop'))}</b>
+          <em>{pct(r.get('sh_buy_stop_pct'))} above entry</em></div>
+      </div>
+      <p class="how">{how}</p>
+      <p class="how">Place the buy-stop as a good-til-canceled order <b>before</b> you short, above the prior rally peak of {money(r.get('sh_rally_high'))}
+        and above the round number (p.250-251). Never short without it (p.226, p.250). Traders use {money(r.get('sh_trader_stop'))}
+        ({pct(r.get('sh_trader_stop_pct'))}) and cover on any move above the 30-week average (p.254-255).</p>
+      <p class="how sm">Lower the buy-stop after each rally of at least 8% fails and the stock drops back to its prior low (7% for traders) (p.251-256).
+        Cover on a close above a declining 30-week average that holds (p.251-252).</p>
+      {tgt}
+      <p class="size">Example size: {shares} sh ≈ ${shares * (ent or 0):,.0f} (1/{rules['positions']} of ${rules['account_size']:,.0f}).
+        Needs a margin account and shares available to borrow. Short interest not checked (p.222).</p>
+    </div>"""
+
+
+def short_panel(d):
+    rg = d.get("regime") or {}
+    shorts, watch = d.get("shorts") or [], d.get("short_watch") or []
+    hid = d.get("short_hidden") or {}
+    nhid = (hid.get("candidates", 0) + hid.get("watch", 0))
+    rules = d["rules"]
+    if rg.get("key") == "bear":
+        policy = ("Bearish market: the book says to be aggressive on the short side, always with a protective buy-stop (p.215-217, p.231).")
+    else:
+        policy = ("Short selling is the exception in this market, not the rule (p.230-231). Only candidates that show all five "
+                  f"A+ marks are listed{f'; {nhid} other candidates are hidden' if nhid else ''}.")
+    if shorts:
+        body = f"<div class='abuys'>{''.join(short_card(r, rules, d) for r in shorts)}</div>"
+    else:
+        body = ("<div class='none'><h3>No short candidates this week</h3><p>Nothing in Stage 3 or 4 meets the book's hard rules "
+                "for a short sale under this market's policy.</p></div>")
+    wl = ""
+    if watch:
+        trs = "".join(
+            f"<tr><td>{tk(dict(r))}</td><td>{money(r.get('price'))}</td><td>{money(r.get('sh_support'))}</td>"
+            f"<td>{money(r.get('sh_entry_stop'))}</td><td>{money(r.get('sh_buy_stop'))} ({pct(r.get('sh_buy_stop_pct'))})</td>"
+            f"<td>{int(r.get('sh_marks_n') or 0)}/5</td></tr>" for r in watch)
+        wl = ("<details class='panel shortwatch' open><summary><span>Short shopping list: tops forming</span>"
+              f"<span class='cnt'>{len(watch)}</span></summary><div class='scroll'><table><thead><tr><th>Ticker</th><th>Price</th>"
+              "<th>Support</th><th>Short below</th><th>Buy-stop</th><th>A+ marks</th></tr></thead>"
+              f"<tbody>{trs}</tbody></table></div></details>")
+    return f"""
+  <section class="hero shorthero" id="shorts">
+    <div class="hero-head"><span class="dot"></span>SHORT CANDIDATES
+      <span class="count">{len(shorts)}</span></div>
+    <p class="shortpol">{e(policy)}</p>
+    {body}
+    {wl}
+    <div class="hero-foot">Never above a rising 30-week average · never a Stage 2 stock · not too thin (over 15,000 shares a week) ·
+      relative strength not still rising · not in a strong group · protective buy-stop within {rules.get('short_max_stop_pct', 15):.0f}%.
+      Higher risk than buying: for education only, not a recommendation.</div>
   </section>"""
 
 
@@ -479,7 +866,9 @@ def build(d):
              ("p", "Wait for pullback", len(d["waits"])),
              ("s", "Skip: stop too wide", len(d["skip_stop"]) + len(d["watch_skip"])),
              ("d", "Discarded: resistance", len(d["disc"]))]
-    jump = {"a": "active", "n": "sec-near", "w": "sec-watch", "p": "sec-wait", "s": "sec-skip", "d": "sec-disc"}
+    if d.get("regime"):
+        tiles.insert(1, ("h", "Short candidates", len(d.get("shorts") or [])))
+    jump = {"h": "shorts", "a": "active", "n": "sec-near", "w": "sec-watch", "p": "sec-wait", "s": "sec-skip", "d": "sec-disc"}
     tile_html = "".join(f"<a class='tile t{c}' href='#{jump[c]}' data-jump='{jump[c]}'><b>{n}</b><span>{t}</span></a>"
                         for c, t, n in tiles)
     cv = d.get("coverage") or {}
@@ -551,8 +940,10 @@ def build(d):
 <div class="mkt {mcls}"><b>S&amp;P 500: {mtxt}</b>
   <span>{'Buying suspended: the book says do not buy into a bearish market.' if blocked else 'Market trend permits buying.'}</span></div>
 {caution}
+{playbook_panel(d)}
 <div class="tiles">{tile_html}</div>
 {active_panel(d)}
+{short_panel(d)}
 {POS_SECTION}
 {lookup_html}
 <div class="groups"><small>SECTORS</small>{groups}</div>
@@ -567,6 +958,10 @@ def build(d):
   no heavy overhead resistance, stop within {d['rules']['wide_stop_pct']:.0f}% of entry. <b>Entry</b> is the breakout level; do not chase more than
   {d['rules']['max_chase_pct']:.0f}% above. <b>Stop</b> sits one-eighth below the base floor (or below the pullback low),
   placed as a sell-stop. Size positions equally, about 1/{d['rules']['positions']} of the account each.</p>
+  <p><b>Card colors.</b> Green = every buy rule passed and none of our caution checks fired. Yellow = it is an active buy, but
+  something deserves a look first (click the chip for the reasons). <b>IDEALS n/5</b> counts the book's marks of quality: a fresh
+  breakout, triple confirmation 3/3, the sector in Stage 2, clear overhead, and positive relative strength. <b>★ Gold star</b> = at least
+  3 of the 5 (the 3 is our threshold, not the book's). Neither color, the count, nor the star is a recommendation.</p>
   <p class="disc">For education only. This is not investment advice and not a recommendation to buy or sell any security.
   Signals are mechanical and can be wrong; verify on the chart and size risk yourself. Data: Yahoo Finance, Friday weekly closes.
   Rules follow <i>Secrets for Profiting in Bull and Bear Markets</i>; thresholds the book does not specify are the author's choices.</p>
@@ -761,6 +1156,110 @@ RULE_NOTES = {
  "80": [
   "Group signal",
   "When several stocks in one group suddenly turn bullish (or bearish) on the charts, that is a clear signal about the group itself."
+ ],
+ "215": [
+  "Selling short: the less traveled road",
+  "About a third of the time the market is going down, and stocks fall faster than they rise. The book's answer is to sell short the weakest stocks in a bear market, with the same discipline as buying."
+ ],
+ "219": [
+  "A buy-stop caps a short's loss",
+  "A protective buy-stop keeps a short's worst case to roughly 10 to 15 percent, the same as a sell-stop on a long. With it you never carry a short to infinity."
+ ],
+ "222": [
+  "Sucker shorts",
+  "A stock that has soared and has a short interest five or more times its average daily volume tends to squeeze the shorts before it ever falls. Avoid the too-obvious short."
+ ],
+ "224": [
+  "Never short above a rising average",
+  "Never sell short a stock above its rising 30-week average, however overvalued it looks. It mirrors never buying a stock below its average."
+ ],
+ "226": [
+  "Thin stocks and the buy-stop",
+  "Don't short a thin stock (average weekly volume under 15,000 shares): covering would push the price up. And never short without a protective buy-stop."
+ ],
+ "227": [
+  "Short-selling don'ts",
+  "Not because the P/E is high, not because the stock has run up, not a crowded sucker short, not a thin stock, not a Stage 2 stock, not a strong group, and never without a buy-stop."
+ ],
+ "228": [
+  "How to do it right",
+  "Start with a stock that has had a big advance and is now in Stage 3 with a flat or falling average, has moved sideways for weeks, and has a clear support level to break."
+ ],
+ "229": [
+  "The ideal short setup",
+  "A substantial advance, then a Stage 3 top: the average flattens or declines, the stock trades sideways, and a clear support level at or below the average will start Stage 4 if it breaks."
+ ],
+ "230": [
+  "When to sell short",
+  "Traders short the whole position on the breakdown. Conservative investors short half on the breakdown and half on the pullback. In a bull market shorting is the exception."
+ ],
+ "231": [
+  "Start with the market",
+  "Aggressive shorting begins when all the market averages are in Stage 4 and most of the long-term gauges are negative."
+ ],
+ "232": [
+  "The group",
+  "The sector should have broken below its 30-week average with its relative strength trending lower, and several of its charts should look weak."
+ ],
+ "234": [
+  "A+ shorts",
+  "The best shorts had a big run-up before the top and have no significant support just below the breakdown point."
+ ],
+ "235": [
+  "Relative strength for shorts",
+  "Never short a stock whose relative strength is strong and rising. The best shorts have RS that has topped, turned down, and ideally fallen below zero."
+ ],
+ "236": [
+  "Volume matters less on shorts",
+  "A stock can fall of its own weight, so volume is not required on a breakdown. It is a bonus if volume rises on the breakdown and dries up on the pullback."
+ ],
+ "237": [
+  "Support below",
+  "A steep Stage 2 advance with little congestion on the way up falls fast. A stock with a big trading zone just below the breakdown resists decline."
+ ],
+ "239": [
+  "Placing the short order",
+  "Sell short with a stop at the breakdown price and a limit that leaves at least a half point of room, good-til-canceled."
+ ],
+ "240": [
+  "Shorting after a big decline",
+  "Possible, but only after a consolidation under the declining average and a new breakdown, like a continuation buy. For aggressive traders."
+ ],
+ "247": [
+  "Downside swing rule",
+  "Project a target below a broken low by repeating the size of the prior swing. Near the target, take profit on half."
+ ],
+ "249": [
+  "Locking in short profits",
+  "Near the downside target, cover half the position and protect the rest with a buy-stop, the same way profits are protected on a long."
+ ],
+ "250": [
+  "The protective buy-stop",
+  "Place it above the prior rally high and above the round number, before you short. If it would have to sit 30 to 40 percent away, choose another stock."
+ ],
+ "251": [
+  "Trailing the buy-stop",
+  "After the first selloff and a failed rally of at least 8 percent, lower the buy-stop above the declining 30-week average and the latest rally peak."
+ ],
+ "254": [
+  "Traders' buy-stops",
+  "If no prior peak is close, set it 4 to 6 percent above the breakdown, trail it tighter than an investor would, and never stay short a stock that moves above its 30-week average."
+ ],
+ "255": [
+  "Round numbers for buy-stops",
+  "Under $20 every half point counts as a round number. Place buy-stops above round numbers, and ignore rallies of less than 7 percent if you are a trader."
+ ],
+ "268": [
+  "Weight of the evidence",
+  "The book follows many long-, intermediate- and short-term gauges and goes with the majority, because any single indicator will eventually give a false signal."
+ ],
+ "269": [
+  "High-risk and low-risk zones",
+  "In a high-risk zone, build cash and be very selective. In a low-risk zone at the end of a bear market, lock in short-sale profits and get ready for selective buying."
+ ],
+ "91": [
+  "A+ stock in an A+ group",
+  "Don't hunt for the one winner in a sick group. Find a strong stock in a strong group, then let the position work."
  ],
  "98": [
   "Overhead supply",
@@ -1012,7 +1511,18 @@ function showTip(b){
   var r=b.getBoundingClientRect(),pw=pop.offsetWidth,x=Math.min(Math.max(8,r.left+window.scrollX),window.scrollX+document.documentElement.clientWidth-pw-8);
   pop.style.left=x+"px";pop.style.top=(r.bottom+window.scrollY+6)+"px";pop.dataset.for=b.dataset.tid;
 }
+function copyText(txt,btn){
+  var done=function(){var o=btn.dataset.o||btn.textContent;btn.dataset.o=o;btn.textContent="Copied ✓";
+    setTimeout(function(){btn.textContent=o;},2000);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done,function(){fallback();});}
+  else fallback();
+  function fallback(){var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done();}catch(x){btn.textContent="Press Ctrl/Cmd+C";}
+    document.body.removeChild(ta);}
+}
 document.addEventListener('click',function(ev){
+  var cb=ev.target.closest&&ev.target.closest('.cpbtn');
+  if(cb){ev.preventDefault();copyText(cb.dataset.prompt,cb);return;}
   var b=ev.target.closest&&ev.target.closest('.pg');
   if(b){ev.preventDefault();if(!pop.hidden&&pop.dataset.for===b.dataset.k)hide();else show(b);return;}
   var t=ev.target.closest&&ev.target.closest('.bdg[data-tip]');
@@ -1177,6 +1687,39 @@ footer h3{margin:0 0 6px;font-size:14px;color:#1c2333}.disc{font-size:11.5px;col
 td .bdg{margin-left:6px;vertical-align:middle}
 .bdg[data-tip]{cursor:help}.bdg[data-tip]:hover,.bdg[data-tip]:focus{outline:2px solid #1d4f7a;outline-offset:1px}
 .pgp{margin:6px 0 0}#pgpop{max-width:360px}
+.bdg.sig{font-size:11px;padding:2px 9px;letter-spacing:.5px}
+.bdg.sig.green{background:#d6f3e0;color:#0e6b35;border:1px solid #1f9d55}
+.bdg.sig.yellow{background:#fff0bd;color:#7a5300;border:1px solid #e0a800}
+.abuy{position:relative}
+.abuy.sg-green{background:#e8f7ee;border-color:#1f9d55;border-top:6px solid #1f9d55}
+.abuy.sg-yellow{background:#fff6d6;border-color:#e0a800;border-top:6px solid #e0a800}
+.abuy.star{border-color:#c99700;box-shadow:0 0 0 3px #ffe27a,0 6px 18px rgba(201,151,0,.35)}
+
+.playbook{margin:14px 32px 0;border-radius:12px;padding:14px 18px;border-left:7px solid #888;background:#f2f4f8}
+.playbook .pbh small{display:block;font-size:11px;letter-spacing:1px;color:#5d6778}.playbook .pbh b{font-size:19px}
+.playbook .pbs{margin:6px 0 10px;font-size:13px;color:#33405a}.playbook .pbe{display:block;margin-top:3px;font-size:12px;color:#5d6778}
+.pbg{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.pbr{background:rgba(255,255,255,.7);border-radius:8px;padding:9px 11px}.pbr small{display:block;font-size:11px;letter-spacing:.6px;color:#5d6778;margin-bottom:2px}.pbr span{font-size:13px}
+.pbf{margin:10px 0 0;font-size:12.5px;color:#33405a}.pbf span{color:#7a8499;margin-left:6px}
+.pball{margin-top:8px}.pball summary{cursor:pointer;font-size:12.5px;color:#1d4f7a;font-weight:600}
+.pball ul{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:8px}.pball li{background:rgba(255,255,255,.75);border-radius:8px;padding:9px 11px;border-left:5px solid #aaa}
+.pball li b{display:block;margin-bottom:2px}.pball li span{display:block;font-size:12.5px;color:#33405a}.pball li em{font-weight:400;color:#7a8499}
+.pball li.cur{outline:2px solid #1d4f7a}
+.pb-bull,.pball li.bull{border-color:#1f9d55}.pb-bull{background:#e8f7ee}
+.pb-high_risk,.pball li.high_risk{border-color:#e0a800}.pb-high_risk{background:#fff6d6}
+.pb-defensive,.pball li.defensive{border-color:#e07b00}.pb-defensive{background:#ffeedd}
+.pb-bear,.pball li.bear{border-color:#c0392b}.pb-bear{background:#fbe6e3}
+.pb-low_risk,.pball li.low_risk{border-color:#2f7fd6}.pb-low_risk{background:#e6f0fb}
+.pb-unclear{background:#eef0f4}
+.shorthero .hero-head{background:#7b1f1f}.shortpol{margin:10px 22px 0;font-size:13px;color:#7b1f1f}
+.abuy.shortc{background:#fbeceb;border-color:#c0392b;border-top:6px solid #c0392b}
+.shorthero .none{color:#5d6778}.th{border-color:#c0392b}.th b{color:#c0392b}
+.shortwatch{margin:14px 22px}
+.bdg.ideals{background:#e7eefb;color:#1d4f7a;border:1px solid #1d4f7a;font-size:11px;padding:2px 9px;letter-spacing:.5px}
+.bdg.starbig{position:absolute;top:-20px;right:-12px;width:48px;height:48px;line-height:46px;text-align:center;font-size:32px;padding:0;border-radius:50%;background:#ffd23f;color:#7a5300;border:2px solid #c99700;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:help}
+.cprow{margin:10px 0 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cpbtn{border:1px solid #1d4f7a;background:#fff;color:#1d4f7a;border-radius:7px;padding:5px 10px;font-weight:700;font-size:12px;cursor:pointer}
+.cpbtn:hover{background:#1d4f7a;color:#fff}.cphint{font-size:11px;color:#6b7689}
 .how.sm{font-size:12px;color:#5d6778}
 .gauges{margin:12px 32px 0;background:#fff;border-radius:10px;padding:8px 14px;box-shadow:0 1px 3px rgba(20,30,60,.08);font-size:13px}
 .gauges summary{cursor:pointer;font-weight:600}.gauges ul{list-style:none;margin:8px 0 4px;padding:0}

@@ -201,6 +201,18 @@ CFG = {
     "swing_lookback_weeks": 156,   # how far before the breakout to look for the peak A; OURS
     "swing_min_decline_pct": 20.0, # the decline A->B must be "important"; OURS
     "swing_max_gain_pct": 100.0,   # ignore projections more than this far above price; OURS
+    # --- short selling (Chapter 7, p.215-262) ---
+    "short_min_weekly_volume": 15_000,   # "if the average weekly volume is under 15,000 shares, look elsewhere" (p.226)
+    "short_fresh_weeks": 2,        # a breakdown is fresh for this many weeks; mirrors fresh_weeks; OURS
+    "short_pullback_band": 8.0,    # % below the breakdown level a pullback rally may sit; mirrors pullback_band; OURS
+    "short_pullback_above": 3.0,   # % above it that still counts; mirrors pullback_below; OURS
+    "short_pullback_max_weeks": 26,# a pullback entry is looked for this long after the breakdown; OURS
+    "short_watch_pct": 10.0,       # a Stage 3 top within this % of its support goes on the shopping list; OURS
+    "short_max_stop_pct": 15.0,    # buy-stop no more than this far above the entry; mirrors wide_stop_pct (p.184, p.219, p.250); OURS
+    "short_runup_pct": 50.0,       # "taken off like a rocket" before the top (p.234); the number is OURS
+    "short_support_band_pct": 20.0,# "significant support close below" looked for this far under the breakdown (p.234, p.237); OURS
+    "short_support_weeks": 8,      # weeks inside that band that make support "heavy"; mirrors base_min_weeks; OURS
+    "short_top_lookback": 104,     # weeks searched for the peak of the top; OURS
     "trader_stop_pct": 5.0,        # "4 to 6 percent below the breakout" (p.194-195): midpoint
     "trader_low_weeks": 8,         # "closest prior reaction low": looked for in this many weeks; OURS
     "trader_stop_max_pct": 8.0,    # a reaction low deeper than this is not "closest"; OURS
@@ -1067,6 +1079,196 @@ def compute_positions(rows, cfg, include_partial=False, loader=None):
     return opened, closed
 
 
+def buy_stop_above(level: float, tick: float = 0.125) -> float:
+    """A protective BUY-stop for a short, placed the way the book places it (p.250-251): one eighth above the
+    prior rally peak, and above the round number when the peak is just under one ("if the prior peak had been
+    64 5/8 or 64 7/8, you would still place the buy-stop at 65 1/8"). Under $20 every half point counts as a
+    round number (p.255). Mirror image of book_stop()."""
+    step = 0.5 if level < 20 else 1.0
+    r = math.ceil(level / step - 1e-9) * step
+    if r - level <= 3 * tick + 1e-9:
+        return r + tick
+    return level + tick
+
+
+SHORT_VERDICTS = {"SHORT - BREAKDOWN", "SHORT - PULLBACK", "SHORT - CONTINUATION"}
+SHORT_WATCH = "SHORT WATCH - TOP FORMING"
+
+
+def short_setup(weekly, ma, stages, rs_series, rs, rs_improving, group_stage, dur, price, cfg):
+    """Chapter 7's short-sale logic: everything on the buy side in reverse (p.224, p.228-239).
+
+    Candidates are Stage 3 tops about to break (a watch list, p.229-230) and Stage 4 stocks on a fresh
+    breakdown, a pullback to the breakdown level, or a new breakdown after a consolidation (p.240).
+    Hard rules: never a Stage 2 stock or one above a rising 30-week MA (p.224), not too thin (p.226), not
+    a very strong or still-rising RS (p.235), not in a strong group (p.227-232), and the protective buy-stop
+    must be close enough (p.250). Quality marks ("A+ shorts", p.234-239) are reported, not required.
+    Returns {} when the stock is not in Stage 3 or 4."""
+    n = len(weekly)
+    stage = int(stages.iloc[-1]) if stages.iloc[-1] == stages.iloc[-1] else 0
+    if stage not in (3, 4) or n < cfg["ma_length"] + 12:
+        return {}
+    H, L, C = (weekly[c].to_numpy(dtype=float) for c in ("High", "Low", "Close"))
+    M = ma.to_numpy(dtype=float)
+    tick = cfg["stop_tick"]
+    lb = min(cfg["short_top_lookback"], n)
+    peak_i = n - lb + int(np.argmax(H[n - lb:]))
+    peak = float(H[peak_i])
+    pre = L[max(0, peak_i - cfg["short_top_lookback"]):peak_i + 1]
+    runup = (peak / float(pre.min()) - 1) * 100 if len(pre) and float(pre.min()) > 0 else np.nan
+    if n - 1 - peak_i < 4:
+        return {}                                   # no top has formed yet
+    ma_now = float(M[-1])
+    ma_slope = (M[-1] - M[-1 - cfg["slope_lookback"]]) / abs(M[-1 - cfg["slope_lookback"]]) \
+        if n > cfg["slope_lookback"] and M[-1 - cfg["slope_lookback"]] else 0.0
+    ma_declining = bool(ma_slope < -cfg["ma_flat_tol"])
+    if ma_slope > cfg["ma_flat_tol"] and price > ma_now:
+        return {}                                   # above a rising 30-week MA: never short (p.224)
+
+    # The top's floor, and the week it broke (p.229-230): the first close below BOTH the lowest low of the
+    # top so far and the 30-week average. That floor is the support whose violation starts Stage 4.
+    run_floor = np.minimum.accumulate(L[peak_i:])
+    k_star = None
+    for k in range(peak_i + 4, n):
+        if C[k] < run_floor[k - 1 - peak_i] and C[k] < M[k]:
+            k_star = k
+            break
+
+    out = {"sh_verdict": None, "sh_kind": None}
+    verdict_, kind = None, None
+    entry = entry_stop = None
+    zone = None
+    if k_star is not None:
+        support = float(run_floor[k_star - 1 - peak_i])
+        bd_i = k_star
+        ws = n - 1 - k_star                          # weeks since the breakdown (0 = this week)
+        rally_pre = float(H[max(0, bd_i - 26):bd_i].max())
+        rally_since = float(H[bd_i:].max())
+        rally = rally_pre
+        bd_stop = book_stop(support, tick)
+        if stage == 4 and ws < cfg["short_fresh_weeks"] and price <= support * (1 + 1e-9) \
+                and price >= bd_stop * (1 - cfg["max_chase_pct"] / 100):
+            # not chased: a stock already more than max_chase_pct under its entry has had its move (mirrors p.129)
+            verdict_, kind = "SHORT - BREAKDOWN", "breakdown"
+            entry_stop = bd_stop
+            entry = entry_stop
+        elif (stage == 4 and cfg["short_fresh_weeks"] <= ws <= cfg["short_pullback_max_weeks"]
+              and support * (1 - cfg["short_pullback_band"] / 100) <= price <= support * (1 + cfg["short_pullback_above"] / 100)
+              and price >= float(L[bd_i:].min()) * (1 + cfg["stop_correction_pct"])):
+            # a real pullback: the stock has bounced back from its post-breakdown low by an investor-sized rally (p.251)
+            verdict_, kind = "SHORT - PULLBACK", "pullback"
+            entry = price
+            rally = max(rally_pre, rally_since)
+            zone = (support * (1 - cfg["short_pullback_band"] / 100), support * (1 + cfg["short_pullback_above"] / 100))
+        elif stage == 4 and ws >= cfg["short_fresh_weeks"]:
+            cl = cfg["continuation_lookback"]
+            if n > cl + 2:
+                w_lo, w_hi = L[-(cl + 1):-1], H[-(cl + 1):-1]
+                lp = int(np.argmin(w_lo))
+                bounced = bool(len(w_hi[lp + 1:]) and float(w_hi[lp + 1:].max()) >= float(w_lo.min()) * (1 + cfg["stop_correction_pct"]))
+                # a consolidation under the declining average (a bounce after the low), then a new low (p.240)
+                if bounced and price < float(w_lo.min()) and float(w_hi.max()) >= ma_now * (1 - cfg["consol_near_ma_pct"] / 100):
+                    verdict_, kind = "SHORT - CONTINUATION", "continuation"
+                    support = float(w_lo.min())
+                    entry_stop = book_stop(support, tick)
+                    entry = entry_stop
+                    rally = float(w_hi.max())
+                    rally_pre = rally
+    else:
+        # no breakdown yet: a top forming above its floor goes on the shopping list (p.229-230)
+        support = float(run_floor[-1])
+        bd_i = n
+        rally = float(H[max(0, n - 26):].max())
+        rally_pre = rally
+        trig = book_stop(support, tick)
+        if stage in (3, 4) and price > support and ma_slope <= cfg["ma_flat_tol"] \
+                and (price / trig - 1) * 100 <= cfg["short_watch_pct"]:
+            verdict_, kind = SHORT_WATCH, "watch"
+            entry_stop = trig
+            entry = trig
+    if verdict_ is None:
+        return {}
+
+    stop_ref = rally if kind != "pullback" else max(rally, price)
+    inv_stop = buy_stop_above(stop_ref, tick)
+    risk = (inv_stop / entry - 1) * 100 if entry else np.nan
+    trader = buy_stop_above(support * 1.05, tick)
+    trader_stop = min(inv_stop, trader) if (not np.isnan(risk) and risk > 10.0) else inv_stop
+    trader_pct = (trader_stop / entry - 1) * 100 if entry else np.nan
+    swing_target = (support - (rally_pre - support)) if rally_pre > support else None
+    if swing_target is not None and swing_target <= 0:
+        swing_target = None
+
+    # support close below the breakdown (p.234, p.237): weeks the stock traded inside the band beneath it
+    lo_band = support * (1 - cfg["short_support_band_pct"] / 100)
+    hist = weekly.iloc[max(0, bd_i - 94):bd_i]
+    inside = int(((hist["Low"] <= support) & (hist["High"] >= lo_band)).sum()) if len(hist) else 0
+    near_support = inside >= cfg["short_support_weeks"]
+
+    wk_vol = float(weekly["Volume"].tail(13).mean())
+    grp_strong = group_stage == 2
+    rs_strong = bool(rs == rs and rs > 0 and rs_improving)
+    checks = []
+    hard = None
+
+    def add(label, state, detail, page):
+        checks.append([label, state, detail, page])
+
+    add("Not above a rising 30-week average", "pass",
+        "Price is below the average, or the average is no longer rising.", "p.224")
+    if wk_vol >= cfg["short_min_weekly_volume"]:
+        add("Trades enough to cover", "pass", f"Averages {wk_vol:,.0f} shares a week.", "p.226")
+    else:
+        add("Trades enough to cover", "fail", f"Averages only {wk_vol:,.0f} shares a week; the book says look "
+            f"elsewhere under {cfg['short_min_weekly_volume']:,}.", "p.226"); hard = hard or "too thin"
+    if rs_strong:
+        add("Relative strength", "fail", f"RS is {rs:.1f} and still rising: never short a stock like this.", "p.235")
+        hard = hard or "relative strength still rising"
+    elif rs == rs and rs < 0:
+        add("Relative strength", "pass", f"RS is {rs:.1f}, below zero: the best kind of short.", "p.235")
+    else:
+        add("Relative strength", "pass", "RS has topped and is no longer rising.", "p.235")
+    if grp_strong:
+        add("Group", "fail", "The stock's sector is in Stage 2, a strong group: don't short it.", "p.227-228")
+        hard = hard or "sector is strong"
+    elif group_stage in (3, 4):
+        add("Group", "pass", f"The sector is in Stage {int(group_stage)}: weak, as wanted.", "p.232")
+    else:
+        add("Group", "warn", "Sector stage is unknown or still basing; the best shorts are in weak groups.", "p.227-232")
+    if not np.isnan(risk) and risk <= cfg["short_max_stop_pct"]:
+        add("Buy-stop close enough", "pass", f"The protective buy-stop is {risk:.1f}% above the entry.", "p.250")
+    else:
+        add("Buy-stop close enough", "fail", f"The protective buy-stop would be {risk:.1f}% above the entry; the book says "
+            "look for another stock when it must be placed far away. The 15% limit is ours, by analogy with the buy side.", "p.250")
+        hard = hard or "buy-stop too far"
+
+    marks = {
+        "Big run-up before the top": bool(runup == runup and runup >= cfg["short_runup_pct"]),
+        "Average declining, not just flat": ma_declining,
+        "Relative strength below zero": bool(rs == rs and rs < 0),
+        "Little support just below": not near_support,
+        "Weak sector": group_stage in (3, 4),
+    }
+    out.update({
+        "sh_verdict": verdict_ if not hard else f"SHORT - AVOID ({hard})", "sh_kind": kind,
+        "sh_support": round(support, 2), "sh_rally_high": round(rally, 2), "sh_peak": round(peak, 2),
+        "sh_entry": round(entry, 2) if entry else None,
+        "sh_entry_stop": round(entry_stop, 2) if entry_stop else None,
+        "sh_entry_limit": round(entry_stop - 0.5, 2) if entry_stop else None,
+        "sh_zone_lo": round(zone[0], 2) if zone else None, "sh_zone_hi": round(zone[1], 2) if zone else None,
+        "sh_buy_stop": round(inv_stop, 2), "sh_buy_stop_pct": round(risk, 1) if not np.isnan(risk) else None,
+        "sh_trader_stop": round(trader_stop, 2), "sh_trader_stop_pct": round(trader_pct, 1) if not np.isnan(trader_pct) else None,
+        "sh_target": round(swing_target, 2) if swing_target else None,
+        "sh_target_pct": round((swing_target / entry - 1) * 100, 1) if swing_target and entry else None,
+        "sh_runup_pct": round(runup, 0) if runup == runup else None,
+        "sh_support_weeks_inside": inside, "sh_ma_declining": ma_declining,
+        "sh_marks": marks, "sh_marks_n": int(sum(marks.values())),
+        "sh_checks": checks, "sh_hard": hard, "sh_weekly_volume": round(wk_vol, 0),
+        "sh_top_weeks": int(max(bd_i - peak_i, 0)),
+    })
+    return out
+
+
 def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
     if weekly is None or len(weekly) < cfg["ma_length"] + 12:
         return None
@@ -1332,6 +1534,10 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         "liq": liq,
     }
     m.update(triple)
+    # last week's move, for the dashboard's "unusual week" flag (ours, not the book's)
+    _cl = weekly["Close"]
+    m["wk_chg_pct"] = (round((float(_cl.iloc[-1]) / float(_cl.iloc[-2]) - 1) * 100, 1)
+                       if len(_cl) >= 2 and float(_cl.iloc[-2]) > 0 else None)
     # exit guidance (Chapter 6): trader stop, swing-rule target, overextension
     m["overextended"] = bool(stage == 2 and m["pct_above_ma"] >= cfg["overextended_pct"])
     m["trader_stop"] = m["trader_stop_pct"] = None
@@ -1374,6 +1580,10 @@ def analyse(ticker, weekly, daily, index_weekly, cfg, group_stage=None):
         m.update({"stop": round(stop_cons, 2), "stop_pct": round(pct, 1),
                   "wide_stop": bool(pct < -cfg["wide_stop_pct"])})
     m["verdict"] = verdict(m, cfg)
+    try:
+        m.update(short_setup(weekly, ma, stages, rs_series, rs, rs_improving, group_stage, dur, price, cfg))
+    except Exception:
+        pass                      # the short side must never break the buy-side screen
     return m
 
 
@@ -1661,6 +1871,84 @@ def explain(m, cfg, mkt=None):
     if stage == 2 and ts is not None and fresh:
         add("Triple confirmation", "pass" if ts == 3 else "na", f"{int(ts)}/3 of volume, RS turning positive, 40%+ run before breakout (p.150-152)", "p.150-152")
     return ck
+
+
+# ---------------------------------------------------------------------------------------------
+# MARKET REGIMES: what the book does in each market condition (Chapters 7-8)
+# ---------------------------------------------------------------------------------------------
+REGIMES = {
+    "bull": {
+        "name": "Bullish: move with the trend",
+        "summary": "The market averages are advancing and most of the long-term gauges agree.",
+        "buys": "Buy Stage 2 breakouts and pullbacks, and move aggressively with the trend (p.270).",
+        "shorts": "Short selling is the exception in a bull market: only an outstandingly negative chart, never the rule (p.230-231).",
+        "held": "Hold Stage 2 stocks above a rising 30-week average and let the trailing stops do the work (p.186).",
+        "cash": "Stay mostly invested.",
+        "pages": "p.129, p.230, p.270"},
+    "high_risk": {
+        "name": "High-risk zone: build cash, be very selective",
+        "summary": "The averages are topping (Stage 3) or the evidence has turned mixed. False signals and whipsaws are most likely now.",
+        "buys": "Be extremely selective with purchases: only the very best (A+) setups, and expect more failures (p.269).",
+        "shorts": "You can test the waters with a short sale or two on the best candidates (p.269).",
+        "held": "Tighten the stops on what you own; take profits on stocks that are very overextended (p.193).",
+        "cash": "Build up large cash reserves (p.269).",
+        "pages": "p.36-37, p.269"},
+    "defensive": {
+        "name": "Defensive: a major average has broken down",
+        "summary": "The S&P 500 or the Dow is in Stage 4, but the rest of the evidence is not yet clearly bearish.",
+        "buys": "Buying is suspended: don't buy when the major market trend is bearish (p.129, p.270).",
+        "shorts": "Begin to look at shorts, but selectively: one or two of the best candidates to test the waters (p.230-231, p.269).",
+        "held": "Keep every position protected by its stop; sell what breaks down (p.176, p.184).",
+        "cash": "Hold a large cash reserve.",
+        "pages": "p.129, p.230, p.269-270"},
+    "bear": {
+        "name": "Bearish: be aggressive on the short side",
+        "summary": "The market averages are in Stage 4 and the majority of the long-term gauges are negative.",
+        "buys": "No buying. A new buy would be fighting the trend (p.129, p.270).",
+        "shorts": "This is when to do aggressive short selling, always with a protective buy-stop (p.215-217, p.231).",
+        "held": "Sell every long that breaks its stop or enters Stage 4 (p.39, p.176).",
+        "cash": "Cash is a position, but short sales are how the book makes money here.",
+        "pages": "p.215-217, p.231, p.270"},
+    "low_risk": {
+        "name": "Low-risk zone: the bear market may be ending",
+        "summary": "The market averages have stopped falling and are basing (Stage 1).",
+        "buys": "Get ready for selective buying; wait for individual Stage 2 breakouts (p.269).",
+        "shorts": "Start locking in profits on short sales (p.269, p.249).",
+        "held": "Cover shorts as they near their targets; trail the buy-stops tighter (p.249-253).",
+        "cash": "Build cash reserves while the base forms (p.269).",
+        "pages": "p.33, p.249, p.269"},
+    "unclear": {
+        "name": "Unclear: not enough market data",
+        "summary": "The market averages could not be classified this week.",
+        "buys": "Treat the buy list with extra care.", "shorts": "Treat the short list with extra care.",
+        "held": "Rely on your stops.", "cash": "", "pages": ""},
+}
+
+
+def market_regime(mkt_stage, dow_stage, pos, neg):
+    """Which of the book's market conditions applies, from the S&P 500 and Dow stages and the majority
+    of the long-term gauges (Weight of the Evidence, p.268-270). The Stage 4 test for a bear market follows
+    p.231: all the averages in Stage 4 and the majority of the other gauges negative."""
+    s, d = mkt_stage, dow_stage
+    if s is None:
+        key = "unclear"
+    elif s == 4 and (d in (4, None)) and neg > pos:
+        key = "bear"
+    elif s == 4 or d == 4:
+        key = "defensive"
+    elif s == 3:
+        key = "high_risk"
+    elif s == 2 and neg > pos:
+        key = "high_risk"
+    elif s == 2:
+        key = "bull"
+    elif s == 1:
+        key = "low_risk"
+    else:
+        key = "unclear"
+    r = dict(REGIMES[key])
+    r.update({"key": key, "sp_stage": s, "dow_stage": d, "gauges_pos": int(pos), "gauges_neg": int(neg)})
+    return r
 
 
 def headline(bucket, m, checks):
@@ -2115,8 +2403,8 @@ def main():
                 "range_weeks", "range_width_pct", "pct_above_breakout", "breakout_level",
                 "shares", "avg_dollar_vol_m", "adv_dollars", "liq", "vol_verify", "stop_basis", "bo_vol_ratio", "bo_buildup",
                 "triple_vol", "triple_rs", "triple_adv", "triple_score", "rs_at_peak",
-                "triple_follow", "triple_rs_before", "triple_adv_pct",
-                "base_weeks_before", "range_bottom", "group_stage", "ma30", "pct_above_ma",
+                "triple_follow", "triple_rs_before", "triple_adv_pct", "wk_chg_pct",
+                "resistance_tests", "base_weeks_before", "range_bottom", "group_stage", "ma30", "pct_above_ma",
                 "trader_stop", "trader_stop_pct", "swing_target", "swing_gain_pct",
                 "swing_peak", "swing_low", "swing_cleared", "overextended")}
             d.update(lr.get(r["ticker"], {}))
@@ -2180,6 +2468,36 @@ def main():
             "r": _clean(_r["trail_stop_pct"] if _b == "NEAR MISS" else _r["stop_pct"]),
             "v": _r["verdict"]}
 
+    # ---- market regime and the short side (Chapter 7-8) ----
+    _pos = sum(g["status"] == "pos" for g in gauges)
+    _neg = sum(g["status"] == "neg" for g in gauges)
+    regime = market_regime(mkt_stage, dow_stage, _pos, _neg)
+    _sk = ("ticker", "group", "group_stage", "price", "stage", "stage_weeks", "rs", "ma30", "ma_state", "liq",
+           "avg_dollar_vol_m", "sh_verdict", "sh_kind", "sh_support", "sh_rally_high", "sh_peak", "sh_entry",
+           "sh_entry_stop", "sh_entry_limit", "sh_zone_lo", "sh_zone_hi", "sh_buy_stop", "sh_buy_stop_pct",
+           "sh_trader_stop", "sh_trader_stop_pct", "sh_target", "sh_target_pct", "sh_runup_pct", "sh_marks",
+           "sh_marks_n", "sh_checks", "sh_weekly_volume", "sh_top_weeks")
+    shorts_all, shorts_watch_all = [], []
+    if "sh_verdict" in df_all.columns:
+        for _, _r in df_all.iterrows():
+            _v = _r.get("sh_verdict")
+            if not isinstance(_v, str):
+                continue
+            _row = {k: _clean(_r.get(k)) for k in _sk}
+            if _v in SHORT_VERDICTS:
+                shorts_all.append(_row)
+            elif _v == SHORT_WATCH:
+                shorts_watch_all.append(_row)
+    # Short selling is the rule in a bear market and the exception otherwise (p.230-231): outside a bear
+    # market only candidates showing all five A+ marks are shown.
+    _bear = regime["key"] == "bear"
+    _keep = lambda r: _bear or r["sh_marks_n"] >= 5
+    shorts = sorted([r for r in shorts_all if _keep(r)], key=lambda r: (-r["sh_marks_n"], r["sh_buy_stop_pct"] or 99))[:25]
+    shorts_watch = sorted([r for r in shorts_watch_all if _keep(r)],
+                          key=lambda r: (-r["sh_marks_n"], r["sh_buy_stop_pct"] or 99))[:25]
+    short_hidden = (len(shorts_all) - len([r for r in shorts_all if _keep(r)]),
+                    len(shorts_watch_all) - len([r for r in shorts_watch_all if _keep(r)]))
+
     _bre = sector_breadth(df_all, [g for g in groups if groups.get(g) is not None])
     _group_detail = {g: dict(gdetail[g], **{"breadth": _bre.get(g)}) for g in gdetail if gdetail[g]}
     _feed = {
@@ -2195,11 +2513,14 @@ def main():
                               > sum(g["status"] == "pos" for g in gauges),
                    "dow_stage": dow_stage},
         "screened": int(len(df)),
+        "regime": regime, "shorts": shorts, "short_watch": shorts_watch,
+        "short_hidden": {"candidates": short_hidden[0], "watch": short_hidden[1]},
         "rules": {"wide_stop_pct": cfg["wide_stop_pct"], "max_chase_pct": cfg["max_chase_pct"],
                   "breakout_vol_mult": cfg["breakout_vol_mult"],
                   "pullback_vol_peak_max": cfg["pullback_vol_peak_max"],
                   "positions": cfg["positions"], "account_size": cfg["account_size"],
-                  "resistance_near_pct": cfg["resistance_near_pct"]},
+                  "resistance_near_pct": cfg["resistance_near_pct"],
+                  "fresh_weeks": cfg["fresh_weeks"], "short_max_stop_pct": cfg["short_max_stop_pct"]},
         "active": _pack(buys, "active"), "skip_stop": _pack(skips, "skip"),
         "watch": _pack(watch, "watch"), "watch_skip": _pack(watch_skip, "watch_skip"),
         "waits": _pack(waits, "wait"), "near": _pack(near, "near"),
