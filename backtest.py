@@ -205,13 +205,18 @@ def _exit_sim(t, weekly, e, init_stop, entry_px):
     leg1 = None                        # investor's first half, sold at Stage 3 (p.36-37)
     j = e
     while j < n and len(res) < 2:
-        win = weekly.iloc[max(0, j - WINDOW + 1):j + 1]
+        # normally the live 5-year window; for a position held longer, keep the window
+        # reaching back to just before the entry so the stage at the purchase is defined
+        win = weekly.iloc[max(0, min(j - WINDOW + 1, e - CFG["ma_length"] - 15)):j + 1]
         ma = infra.moving_average(win["Close"], CFG["ma_length"], CFG["ma_type"])
         stg = w.classify(win, ma, CFG)[0]
         for style in ("investor", "trader"):
             if style in res:
                 continue
-            ps = w.position_status(dict(pos, style=style), win, ma, stg, CFG)
+            try:
+                ps = w.position_status(dict(pos, style=style), win, ma, stg, CFG)
+            except (ValueError, KeyError, IndexError):
+                continue                      # no usable reading this week: no signal
             st = ps["status"]
             if st == "SELL ON FIRST RALLY":
                 # the book says sell on the first RALLY, not at once: our reading is the

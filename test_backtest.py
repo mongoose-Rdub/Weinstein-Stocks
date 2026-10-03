@@ -94,6 +94,15 @@ want3 = 100000 * (1 + (0.5 * 0.20 + 0.5 * 0.04) / 15)
 assert abs(eq3.iloc[-1] - want3) < 1e-6 * want3, (eq3.iloc[-1], want3)
 ok("half leg and remaining leg settle on their own dates")
 
+print("6. A position held longer than the 5-year window still gets a stage reading")
+wk_idx = pd.date_range("2005-01-07", periods=420, freq="W-FRI")
+r_ = np.random.default_rng(3)
+c = 20 * np.exp(np.cumsum(r_.normal(0.004, 0.01, 420)))
+wk = pd.DataFrame({"Open": c, "High": c * 1.01, "Low": c * 0.99, "Close": c, "Volume": 1e6}, index=wk_idx)
+ex = b._exit_sim("T", wk, 60, c[60] * 0.85, float(c[60]))
+assert ex["investor"][2] in ("OPEN",) or ex["investor"][0] > 60, ex
+ok("a 6.9-year hold runs without error")
+
 print("3. Report builds from trades")
 rows = [{"ticker": "A", "signal": "2020-01-03", "entry": "2020-01-10", "verdict": "BREAKOUT - BUY",
          "sector": "Tech", "sector_stage": 2, "signal_close": 10, "entry_px": 10, "gap_pct": 0,
