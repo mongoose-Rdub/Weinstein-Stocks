@@ -86,6 +86,14 @@ eq2, st2, _ = b.simulate(many, spyw, slots=15)
 assert st2["signals_taken"] == 15 and st2["signals_skipped_full"] == 5, st2
 ok("1/15 sizing, compounding, and skipping when all slots are full")
 
+print("5. Half sold at Stage 3, the rest held (portfolio legs)")
+tt = pd.DataFrame([dict(trow("S1", dates[0], dates[20], 12.0), investor_exit1=str(dates[10].date()),
+                        investor_ret1=20.0, investor_ret2=4.0)])
+eq3, st3, eq3b = b.simulate(tt, spyw, slots=15)
+want3 = 100000 * (1 + (0.5 * 0.20 + 0.5 * 0.04) / 15)
+assert abs(eq3.iloc[-1] - want3) < 1e-6 * want3, (eq3.iloc[-1], want3)
+ok("half leg and remaining leg settle on their own dates")
+
 print("3. Report builds from trades")
 rows = [{"ticker": "A", "signal": "2020-01-03", "entry": "2020-01-10", "verdict": "BREAKOUT - BUY",
          "sector": "Tech", "sector_stage": 2, "signal_close": 10, "entry_px": 10, "gap_pct": 0,

@@ -20,8 +20,9 @@ the report):
     hit p.176/184, Stage 4 p.39, Stage 3 p.36, failed breakout p.116; trader style
     adds the 30-week-MA exit p.196). A stop fills at the stop price, or at the open if
     the stock gaps below it. Any other sell signal is read on Friday's close and
-    executed at the next Monday open. "Sell half at Stage 3" is treated as selling
-    all, and "take partial" signals are ignored (hold).
+    executed at the next Monday open. The investor sells HALF at Stage 3
+    and keeps half under the trailing stop (p.36-37); the trader sells all (p.36).
+    "Take partial" signals are ignored (hold).
   * Fixed horizons: the close 13, 26 and 52 weeks after the entry week, ignoring stops.
   * Baseline: the same Fridays, EVERY stock, held the same horizons. An Active Buy
     that beats this is adding something; one that does not is only riding the market.
@@ -55,6 +56,7 @@ WINDOW = 260                                  # 5 years of weekly bars, as the l
 BUY = w.BUY_VERDICTS
 CFG = dict(w.CFG)
 CFG["resistance_mode"] = "strict"             # the live default
+EXIT_MODE = "half3"      # "half3": investor sells HALF at Stage 3 and keeps half (p.36-37); "full3": sells all
 
 
 # ----------------------------------------------------------------- data ------
@@ -200,6 +202,7 @@ def _exit_sim(t, weekly, e, init_stop, entry_px):
     pos = {"ticker": t, "buy_date": weekly.index[e], "buy_price": entry_px}
     pending = {}                       # "sell on the first rally" (p.116) seen, rally not yet
     flagged = False
+    leg1 = None                        # investor's first half, sold at Stage 3 (p.36-37)
     j = e
     while j < n and len(res) < 2:
         win = weekly.iloc[max(0, j - WINDOW + 1):j + 1]
@@ -219,6 +222,14 @@ def _exit_sim(t, weekly, e, init_stop, entry_px):
                     k = j + 1
                     res[style] = (k, O[k] if k < n else C[j], st)
                 continue
+            if st == "SELL HALF - STAGE 3" and style == "investor" and EXIT_MODE == "half3":
+                # "sell half ... protect the rest with a stop under the new support" (p.36-37):
+                # sell half at the next open, keep the other half until the stop, Stage 4 or
+                # another sell signal; the trailing stop in position_status is that protection
+                if leg1 is None:
+                    k = j + 1
+                    leg1 = (k, O[k] if k < n else C[j])
+                continue
             if not st.startswith("SELL"):
                 if pending.get(style) and C[j] > entry_px:
                     k = j + 1
@@ -236,6 +247,13 @@ def _exit_sim(t, weekly, e, init_stop, entry_px):
         if s not in res:
             res[s] = (n - 1, C[-1], "OPEN")
     res["flag"] = flagged
+    res["leg1"] = None
+    if leg1 is not None:
+        xi, px2, why = res["investor"]
+        res["leg1"] = leg1
+        res["leg2_px"] = px2
+        res["investor"] = (xi, 0.5 * leg1[1] + 0.5 * px2,
+                           why if why == "OPEN" else f"HALF AT STAGE 3, THEN {why}")
     return res
 
 
@@ -307,6 +325,13 @@ def process(t):
             row[f"{s}_reason"] = why
             row[f"{s}_ret"] = round((xpx / entry_px - 1) * 100, 2)
             row[f"{s}_weeks"] = int(max(xi - e, 0))
+        if ex["leg1"] is not None:
+            k1, p1 = ex["leg1"]
+            row["investor_exit1"] = weekly.index[min(k1, n - 1)].date().isoformat()
+            row["investor_ret1"] = round((p1 / entry_px - 1) * 100, 2)
+            row["investor_ret2"] = round((ex["leg2_px"] / entry_px - 1) * 100, 2)
+        else:
+            row["investor_exit1"], row["investor_ret1"], row["investor_ret2"] = "", "", ""
         trades.append(row)
         blocked_until = ex["investor"][0] if ex["investor"][2] != "OPEN" else n
     return t, trades, base
@@ -330,7 +355,7 @@ def cmd_run(a):
     donep = os.path.join(OUT, "done.txt")
     tradesp = os.path.join(OUT, "trades.csv")
     basep = os.path.join(OUT, "baseline.json")
-    sig = f"{a.start}|{a.step}"
+    sig = f"{a.start}|{a.step}|{EXIT_MODE}"
     sigp = os.path.join(OUT, "run_signature.txt")
     if os.path.exists(sigp) and open(sigp).read() != sig:
         for p in (donep, tradesp, basep):
@@ -442,7 +467,7 @@ def write_md(S):
          "on each Friday. Entry at the next Monday's open.", "",
          "## Win rate = share of trades that ended positive", "",
          "| Exit rule | Trades | Win rate | Average | Median |", "|---|---|---|---|---|"]
-    for k, lab in (("book_exit_investor", "Book exit, investor (stop / Stage 3-4 / failed breakout)"),
+    for k, lab in (("book_exit_investor", "Book exit, investor (sell half at Stage 3, rest on stop / Stage 4)"),
                    ("book_exit_trader", "Book exit, trader (adds 30-week MA exit)")):
         r = S[k]
         L.append(f"| {lab} | {r['n']:,} | **{r['win']}%** | {r['avg']}% | {r['median']}% |")
@@ -474,8 +499,8 @@ def write_md(S):
           "sell logic as breakouts without enough volume (p.116: sell on the first rally). A buy that the sell side "
           "calls weak is a sign the buy and sell checks disagree; those trades exit at the first weekly close above "
           "the entry price (our reading of 'first rally'), at the next open.",
-          "- Our own choices, not the book's: entry at the next open, one position per stock, 'sell half' treated "
-          "as sell all, 'take partial' ignored.",
+          "- Our own choices, not the book's: entry at the next open, one position per stock, 'take partial' signals "
+          "ignored. The investor sells half at Stage 3 and keeps half (p.36-37); the trader sells all (p.36).",
           "- No news, no contrary-opinion or price/dividend gauges, no commissions or slippage.",
           "- A high win rate is not a high return: this counts positive trades, not how much they made."]
     open(os.path.join(OUT, "backtest.md"), "w").write("\n".join(L) + "\n")
@@ -523,15 +548,20 @@ def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="invest
             px = None
             if c is not None:
                 px = c.loc[:w].iloc[-1] if len(c.loc[:w]) else None
-            v += p["shares"] * (px if px is not None else p["entry_px"])
+            v += p["shares"] * p["rem"] * (px if px is not None else p["entry_px"])
         return v
 
     def settle(w):
         nonlocal cash, cash_b
-        for p in [p for p in open_pos if p["exit_d"] is not None and p["exit_d"] <= w]:
-            cash += p["shares"] * p["exit_px"]
-            cash_b += p["spy_shares"] * spy_open(p["exit_d"])
-            open_pos.remove(p)
+        for p in list(open_pos):
+            for lg in p["legs"]:
+                if not lg["done"] and lg["d"] is not None and lg["d"] <= w:
+                    cash += p["shares"] * lg["frac"] * lg["px"]
+                    cash_b += p["spy_shares"] * lg["frac"] * spy_open(lg["d"])
+                    lg["done"] = True
+                    p["rem"] -= lg["frac"]
+            if p["rem"] <= 1e-9:
+                open_pos.remove(p)
 
     for w in weeks:
         settle(w)                                         # exits at this week's open (earlier entries)
@@ -544,18 +574,25 @@ def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="invest
             if size <= 0:
                 skipped += 1
                 continue
-            ret = r[f"{style}_ret"] / 100.0
             still_open = r[f"{style}_reason"] == "OPEN"
-            open_pos.append({"t": r["ticker"], "shares": size / r["entry_px"], "entry_px": r["entry_px"],
-                             "spy_shares": size / spy_open(w),
-                             "exit_d": None if still_open else r["exit_d"],
-                             "exit_px": r["entry_px"] * (1 + ret)})
+            ep = r["entry_px"]
+            half = style == "investor" and str(r.get("investor_exit1", "")) not in ("", "nan")
+            if half:
+                legs = [{"d": pd.Timestamp(r["investor_exit1"]), "frac": 0.5,
+                         "px": ep * (1 + float(r["investor_ret1"]) / 100), "done": False},
+                        {"d": None if still_open else r["exit_d"], "frac": 0.5,
+                         "px": ep * (1 + float(r["investor_ret2"]) / 100), "done": False}]
+            else:
+                legs = [{"d": None if still_open else r["exit_d"], "frac": 1.0,
+                         "px": ep * (1 + r[f"{style}_ret"] / 100.0), "done": False}]
+            open_pos.append({"t": r["ticker"], "shares": size / ep, "entry_px": ep, "rem": 1.0,
+                             "spy_shares": size / spy_open(w), "legs": legs})
             cash -= size
             cash_b -= size
             taken += 1
         settle(w)                                         # same-week exits (stop hit in the entry week)
         v = value(w)
-        eq_b.append(cash_b + sum(p["spy_shares"] for p in open_pos) * float(spc.loc[:w].iloc[-1]))
+        eq_b.append(cash_b + sum(p["spy_shares"] * p["rem"] for p in open_pos) * float(spc.loc[:w].iloc[-1]))
         eq.append(cash + v)
         invested.append(v / (cash + v) if cash + v else 0)
     eq = pd.Series(eq, index=weeks)
