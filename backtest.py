@@ -181,6 +181,15 @@ def _init(spw, gates, smap, start, step):
     G.update(spw=spw, gates=gates, smap=smap, start=pd.Timestamp(start), step=step)
 
 
+# every signal-time reading the screen computes that a later test might want to rank or filter on
+FEATURES = ("rs", "rs_improving", "rs_at_peak", "rs_below_peak", "triple_score", "triple_vol", "triple_rs",
+            "triple_adv", "triple_follow", "triple_rs_before", "triple_adv_pct", "vol_ratio_4wk",
+            "bo_vol_ratio", "bo_heavy", "vol_vs_peak", "pct_above_breakout", "pct_above_ma", "ma_state",
+            "resistance_pct", "resistance_clear", "resistance_note", "resistance_tests", "base_weeks_before",
+            "range_weeks", "range_width_pct", "new_high", "overextended", "liq", "adv_dollars",
+            "wk_chg_pct", "after_advance", "swing_gain_pct", "history_weeks")
+
+
 def _fwd(close, e, entry_px):
     out = {}
     n = len(close)
@@ -321,7 +330,12 @@ def process(t):
                "verdict": r["verdict"], "sector": sector or "", "sector_stage": gs if gs is not None else "",
                "signal_close": round(float(close[i]), 4), "entry_px": round(entry_px, 4),
                "gap_pct": round((entry_px / close[i] - 1) * 100, 2),
-               "stop_pct": r.get("stop_pct"), "stage_weeks": r.get("stage_weeks")}
+               "stop_pct": r.get("stop_pct"), "stage_weeks": r.get("stage_weeks"),
+               "mkt_stage": g["mkt"], "dow_stage": g["dow"]}
+        for k_ in FEATURES:
+            v_ = r.get(k_)
+            row[k_] = round(float(v_), 4) if isinstance(v_, (int, float, np.floating, np.integer)) \
+                and not isinstance(v_, bool) and v_ == v_ else (v_ if isinstance(v_, (bool, str)) else "")
         row.update({k: round(v, 2) if v == v else "" for k, v in _fwd(close, e, entry_px).items()})
         row["lowvol_flag"] = bool(ex["flag"])
         for s in ("investor", "trader"):
@@ -360,7 +374,7 @@ def cmd_run(a):
     donep = os.path.join(OUT, "done.txt")
     tradesp = os.path.join(OUT, "trades.csv")
     basep = os.path.join(OUT, "baseline.json")
-    sig = f"{a.start}|{a.step}|{EXIT_MODE}"
+    sig = f"{a.start}|{a.step}|{EXIT_MODE}|v2"
     sigp = os.path.join(OUT, "run_signature.txt")
     if os.path.exists(sigp) and open(sigp).read() != sig:
         for p in (donep, tradesp, basep):
@@ -511,26 +525,36 @@ def write_md(S):
     open(os.path.join(OUT, "backtest.md"), "w").write("\n".join(L) + "\n")
 
 # ------------------------------------------------------------- portfolio -----
-def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="investor"):
-    """Follow the backtest rules strictly as one account.
-
-    Every position is 1/`slots` of the account's value on its entry day (the 1/15 sizing is
-    ours, see CFG). Signals are taken in order of entry date; on the same day the youngest
-    Stage 2 (fewest stage_weeks) comes first, as the screen orders them. When all slots are
-    full the signal is skipped. Cash earns nothing. The account is valued every Friday at
-    that week's close; entries and exits happen at the week's open.
-    Returns (equity Series indexed by Friday, stats dict)."""
-    tr = trades.copy()
-    tr["entry_d"] = pd.to_datetime(tr["entry"])
-    tr["exit_d"] = pd.to_datetime(tr[f"{style}_exit"])
-    tr = tr.sort_values(["entry_d", "stage_weeks", "ticker"])
-    closes = {}
-    for t in tr["ticker"].unique():
+def load_closes(tickers):
+    out = {}
+    for t in tickers:
         d = load(t)
         if d is None:
             continue
         d = d[~d.index.duplicated()].sort_index()
-        closes[t] = weekly_of(d)["Close"]
+        out[t] = weekly_of(d)["Close"]
+    return out
+
+
+def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="investor",
+             order=(("stage_weeks", True),), idle_spy=False, full3=False, closes=None):
+    """Follow the backtest rules strictly as one account.
+
+    Every position is 1/`slots` of the account's value on its entry day (the 1/15 sizing is
+    ours, see CFG). Signals are taken in order of entry date; on the same day by `order`
+    (default: youngest Stage 2 first, as the screen orders them). When all slots are full the
+    signal is skipped. Cash earns nothing, unless idle_spy=True (cash sits in SPY, an overlay
+    that is NOT from the book). full3=True sells the investor's whole position at Stage 3
+    instead of half. The account is valued every Friday at that week's close; entries and
+    exits happen at the week's open.
+    Returns (equity Series indexed by Friday, stats dict, matched-SPY equity Series)."""
+    tr = trades.copy()
+    tr["entry_d"] = pd.to_datetime(tr["entry"])
+    tr["exit_d"] = pd.to_datetime(tr[f"{style}_exit"])
+    cols = ["entry_d"] + [c for c, _ in order] + ["ticker"]
+    tr = tr.sort_values(cols, ascending=[True] + [a_ for _, a_ in order] + [True], na_position="last")
+    if closes is None:
+        closes = load_closes(tr["ticker"].unique())
     weeks = spy_weekly.index[spy_weekly.index >= tr["entry_d"].min()]
     spo, spc = spy_weekly["Open"], spy_weekly["Close"]
 
@@ -538,13 +562,37 @@ def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="invest
         x = spo.loc[:d]
         return float(x.iloc[-1]) if len(x) else float(spo.iloc[0])
 
+    def spy_close(d):
+        x = spc.loc[:d]
+        return float(x.iloc[-1]) if len(x) else float(spc.iloc[0])
+
     cash_b = start_equity                # same dollars, same dates, but in SPY
     cash = start_equity
-    open_pos = []                         # dicts: t, shares, exit_d, exit_px
+    cu = start_equity / spy_open(weeks[0])   # idle cash held as SPY units (idle_spy only)
+    open_pos = []
     taken = skipped = 0
     eq, eq_b, invested = [], [], []
     by_entry = {k: g for k, g in tr.groupby("entry_d")}
-    pending_exit = []
+
+    def cash_open(w):
+        return cu * spy_open(w) if idle_spy else cash
+
+    def cash_close(w):
+        return cu * spy_close(w) if idle_spy else cash
+
+    def spend(x, w):
+        nonlocal cash, cu
+        if idle_spy:
+            cu -= x / spy_open(w)
+        else:
+            cash -= x
+
+    def receive(x, d):
+        nonlocal cash, cu
+        if idle_spy:
+            cu += x / spy_open(d)
+        else:
+            cash += x
 
     def value(w):
         v = 0.0
@@ -557,11 +605,11 @@ def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="invest
         return v
 
     def settle(w):
-        nonlocal cash, cash_b
+        nonlocal cash_b
         for p in list(open_pos):
             for lg in p["legs"]:
                 if not lg["done"] and lg["d"] is not None and lg["d"] <= w:
-                    cash += p["shares"] * lg["frac"] * lg["px"]
+                    receive(p["shares"] * lg["frac"] * lg["px"], lg["d"])
                     cash_b += p["spy_shares"] * lg["frac"] * spy_open(lg["d"])
                     lg["done"] = True
                     p["rem"] -= lg["frac"]
@@ -574,15 +622,20 @@ def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="invest
             if len(open_pos) >= slots or r["ticker"] in {p["t"] for p in open_pos}:
                 skipped += 1
                 continue
-            equity_now = cash + value(w - pd.Timedelta(days=7))
-            size = min(equity_now / slots, cash)
+            avail = cash_open(w)
+            equity_now = avail + value(w - pd.Timedelta(days=7))
+            size = min(equity_now / slots, avail)
             if size <= 0:
                 skipped += 1
                 continue
             still_open = r[f"{style}_reason"] == "OPEN"
             ep = r["entry_px"]
             half = style == "investor" and str(r.get("investor_exit1", "")) not in ("", "nan")
-            if half:
+            if half and full3:
+                # sell everything at the Stage 3 signal instead of half
+                legs = [{"d": pd.Timestamp(r["investor_exit1"]), "frac": 1.0,
+                         "px": ep * (1 + float(r["investor_ret1"]) / 100), "done": False}]
+            elif half:
                 legs = [{"d": pd.Timestamp(r["investor_exit1"]), "frac": 0.5,
                          "px": ep * (1 + float(r["investor_ret1"]) / 100), "done": False},
                         {"d": None if still_open else r["exit_d"], "frac": 0.5,
@@ -592,14 +645,15 @@ def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="invest
                          "px": ep * (1 + r[f"{style}_ret"] / 100.0), "done": False}]
             open_pos.append({"t": r["ticker"], "shares": size / ep, "entry_px": ep, "rem": 1.0,
                              "spy_shares": size / spy_open(w), "legs": legs})
-            cash -= size
+            spend(size, w)
             cash_b -= size
             taken += 1
         settle(w)                                         # same-week exits (stop hit in the entry week)
         v = value(w)
-        eq_b.append(cash_b + sum(p["spy_shares"] * p["rem"] for p in open_pos) * float(spc.loc[:w].iloc[-1]))
-        eq.append(cash + v)
-        invested.append(v / (cash + v) if cash + v else 0)
+        eq_b.append(cash_b + sum(p["spy_shares"] * p["rem"] for p in open_pos) * spy_close(w))
+        tot = cash_close(w) + v
+        eq.append(tot)
+        invested.append(v / tot if tot else 0)
     eq = pd.Series(eq, index=weeks)
     eq_b = pd.Series(eq_b, index=weeks)
     yrs = (eq.index[-1] - eq.index[0]).days / 365.25

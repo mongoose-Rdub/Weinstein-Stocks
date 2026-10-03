@@ -103,6 +103,18 @@ ex = b._exit_sim("T", wk, 60, c[60] * 0.85, float(c[60]))
 assert ex["investor"][2] in ("OPEN",) or ex["investor"][0] > 60, ex
 ok("a 6.9-year hold runs without error")
 
+print("7. Ranking decides which signal fills a scarce slot; idle cash in SPY earns SPY")
+two = pd.DataFrame([dict(trow("S1", dates[0], dates[10], 30.0), triple_score=1, stage_weeks=2),
+                    dict(trow("S2", dates[0], dates[10], -10.0), triple_score=3, stage_weeks=9)])
+_, a1, _ = b.simulate(two, spyw, slots=1, order=(("stage_weeks", True),))
+_, a2, _ = b.simulate(two, spyw, slots=1, order=(("triple_score", False),))
+assert a1["final_multiple"] > 1.2 and a2["final_multiple"] < 0.95, (a1, a2)
+none_idle, _, _ = b.simulate(two.iloc[:1], spyw, slots=15)
+idle, _, _ = b.simulate(two.iloc[:1], spyw, slots=15, idle_spy=True)
+spy_ret = float(spyw["Close"].iloc[-1] / spyw["Close"].loc[dates[0]])
+assert idle.iloc[-1] > none_idle.iloc[-1] * 0.99 and abs(idle.iloc[-1] / 100000 - spy_ret) < 0.35 * spy_ret
+ok("rank order picks the signal; idle cash tracks SPY")
+
 print("3. Report builds from trades")
 rows = [{"ticker": "A", "signal": "2020-01-03", "entry": "2020-01-10", "verdict": "BREAKOUT - BUY",
          "sector": "Tech", "sector_stage": 2, "signal_close": 10, "entry_px": 10, "gap_pct": 0,
