@@ -64,6 +64,28 @@ ex = b._exit_sim("T", wk, e, 45.0, float(wk["Open"].iloc[e]))
 assert ex["investor"][1] == 45.0, ex
 ok("gap fills at the open, intraday hit fills at the stop")
 
+print("4. Portfolio simulation: sizing, skipped signals, ending value")
+spyw = b.weekly_of(mk)
+w_ = b.weekly_of(b.load("S1"))
+dates = list(w_.index[w_.index > "2018-01-01"])
+def trow(t, e, x, ret, sw=3, reason="STOP HIT"):
+    return {"ticker": t, "entry": str(e.date()), "investor_exit": str(x.date()), "investor_ret": ret,
+            "investor_reason": reason, "stage_weeks": sw,
+            "entry_px": float(b.weekly_of(b.load(t)).loc[e, "Open"])}
+tt = pd.DataFrame([trow("S1", dates[0], dates[10], 20.0), trow("S2", dates[12], dates[20], -10.0)])
+eq, st, eq_b = b.simulate(tt, spyw, slots=15)
+want = 100000 * (1 + 0.20 / 15) * (1 - 0.10 / 15)
+assert abs(eq.iloc[-1] - want) < 1e-6 * want, (eq.iloc[-1], want)
+# matched SPY: same dollars on the same dates
+o = spyw["Open"]
+s1 = 100000 / 15; s2 = (100000 * (1 + 0.20 / 15)) / 15
+want_b = 100000 + s1 * (o.loc[dates[10]] / o.loc[dates[0]] - 1) + s2 * (o.loc[dates[20]] / o.loc[dates[12]] - 1)
+assert abs(eq_b.iloc[-1] - want_b) < 1e-6 * want_b, (eq_b.iloc[-1], want_b)
+many = pd.DataFrame([trow(f"S{i}", dates[0], dates[5], 5.0) for i in range(20)])
+eq2, st2, _ = b.simulate(many, spyw, slots=15)
+assert st2["signals_taken"] == 15 and st2["signals_skipped_full"] == 5, st2
+ok("1/15 sizing, compounding, and skipping when all slots are full")
+
 print("3. Report builds from trades")
 rows = [{"ticker": "A", "signal": "2020-01-03", "entry": "2020-01-10", "verdict": "BREAKOUT - BUY",
          "sector": "Tech", "sector_stage": 2, "signal_close": 10, "entry_px": 10, "gap_pct": 0,

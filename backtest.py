@@ -96,7 +96,7 @@ def cmd_fetch(a):
                                                 deadline=time.time() + 600)
         json.dump({"tickers": tickers, "smap": smap}, open(upath, "w"))
         print("universe", meta)
-    need = ["^GSPC", "^DJI"] + list(infra.SECTOR_ETFS.values())
+    need = ["^GSPC", "^DJI", "SPY"] + list(infra.SECTOR_ETFS.values())
     queue = [t for t in need + list(tickers) if not os.path.exists(_path(t))]
     print(f"{len(tickers)} tickers; {len(queue)} still to download")
     th = uf.Throttle(chunk=40, hi=60)
@@ -322,7 +322,7 @@ def cmd_run(a):
         import glob
         tickers = [os.path.basename(p)[:-4] for p in glob.glob(os.path.join(CACHE, "*.pkl"))]
         smap = {}
-    tickers = [t for t in tickers if not t.startswith("_IDX_") and t not in infra.SECTOR_ETFS.values()]
+    tickers = [t for t in tickers if not t.startswith("_IDX_") and t not in infra.SECTOR_ETFS.values() and t != "SPY"]
     if a.max_tickers:
         import random
         random.Random(1).shuffle(tickers)
@@ -375,6 +375,7 @@ def cmd_run(a):
                 break
     flush()
     cmd_report(a)
+    cmd_portfolio(a)
 
 
 # ---------------------------------------------------------------- report -----
@@ -479,6 +480,160 @@ def write_md(S):
           "- A high win rate is not a high return: this counts positive trades, not how much they made."]
     open(os.path.join(OUT, "backtest.md"), "w").write("\n".join(L) + "\n")
 
+# ------------------------------------------------------------- portfolio -----
+def simulate(trades, spy_weekly, slots=15, start_equity=100_000.0, style="investor"):
+    """Follow the backtest rules strictly as one account.
+
+    Every position is 1/`slots` of the account's value on its entry day (the 1/15 sizing is
+    ours, see CFG). Signals are taken in order of entry date; on the same day the youngest
+    Stage 2 (fewest stage_weeks) comes first, as the screen orders them. When all slots are
+    full the signal is skipped. Cash earns nothing. The account is valued every Friday at
+    that week's close; entries and exits happen at the week's open.
+    Returns (equity Series indexed by Friday, stats dict)."""
+    tr = trades.copy()
+    tr["entry_d"] = pd.to_datetime(tr["entry"])
+    tr["exit_d"] = pd.to_datetime(tr[f"{style}_exit"])
+    tr = tr.sort_values(["entry_d", "stage_weeks", "ticker"])
+    closes = {}
+    for t in tr["ticker"].unique():
+        d = load(t)
+        if d is None:
+            continue
+        d = d[~d.index.duplicated()].sort_index()
+        closes[t] = weekly_of(d)["Close"]
+    weeks = spy_weekly.index[spy_weekly.index >= tr["entry_d"].min()]
+    spo, spc = spy_weekly["Open"], spy_weekly["Close"]
+
+    def spy_open(d):
+        x = spo.loc[:d]
+        return float(x.iloc[-1]) if len(x) else float(spo.iloc[0])
+
+    cash_b = start_equity                # same dollars, same dates, but in SPY
+    cash = start_equity
+    open_pos = []                         # dicts: t, shares, exit_d, exit_px
+    taken = skipped = 0
+    eq, eq_b, invested = [], [], []
+    by_entry = {k: g for k, g in tr.groupby("entry_d")}
+    pending_exit = []
+
+    def value(w):
+        v = 0.0
+        for p in open_pos:
+            c = closes.get(p["t"])
+            px = None
+            if c is not None:
+                px = c.loc[:w].iloc[-1] if len(c.loc[:w]) else None
+            v += p["shares"] * (px if px is not None else p["entry_px"])
+        return v
+
+    def settle(w):
+        nonlocal cash, cash_b
+        for p in [p for p in open_pos if p["exit_d"] is not None and p["exit_d"] <= w]:
+            cash += p["shares"] * p["exit_px"]
+            cash_b += p["spy_shares"] * spy_open(p["exit_d"])
+            open_pos.remove(p)
+
+    for w in weeks:
+        settle(w)                                         # exits at this week's open (earlier entries)
+        for _, r in (by_entry[w].iterrows() if w in by_entry else []):
+            if len(open_pos) >= slots or r["ticker"] in {p["t"] for p in open_pos}:
+                skipped += 1
+                continue
+            equity_now = cash + value(w - pd.Timedelta(days=7))
+            size = min(equity_now / slots, cash)
+            if size <= 0:
+                skipped += 1
+                continue
+            ret = r[f"{style}_ret"] / 100.0
+            still_open = r[f"{style}_reason"] == "OPEN"
+            open_pos.append({"t": r["ticker"], "shares": size / r["entry_px"], "entry_px": r["entry_px"],
+                             "spy_shares": size / spy_open(w),
+                             "exit_d": None if still_open else r["exit_d"],
+                             "exit_px": r["entry_px"] * (1 + ret)})
+            cash -= size
+            cash_b -= size
+            taken += 1
+        settle(w)                                         # same-week exits (stop hit in the entry week)
+        v = value(w)
+        eq_b.append(cash_b + sum(p["spy_shares"] for p in open_pos) * float(spc.loc[:w].iloc[-1]))
+        eq.append(cash + v)
+        invested.append(v / (cash + v) if cash + v else 0)
+    eq = pd.Series(eq, index=weeks)
+    eq_b = pd.Series(eq_b, index=weeks)
+    yrs = (eq.index[-1] - eq.index[0]).days / 365.25
+    dd = (eq / eq.cummax() - 1).min()
+    st = {"start": str(eq.index[0].date()), "end": str(eq.index[-1].date()), "years": round(yrs, 1),
+          "final_multiple": round(float(eq.iloc[-1] / start_equity), 2),
+          "cagr": round(float((eq.iloc[-1] / start_equity) ** (1 / yrs) - 1) * 100, 1),
+          "max_drawdown": round(float(dd) * 100, 1),
+          "signals_taken": taken, "signals_skipped_full": skipped,
+          "avg_invested_pct": round(float(np.mean(invested)) * 100, 1),
+          "matched_spy_final_multiple": round(float(eq_b.iloc[-1] / start_equity), 2),
+          "matched_spy_cagr": round(float((eq_b.iloc[-1] / start_equity) ** (1 / yrs) - 1) * 100, 1),
+          "matched_spy_max_drawdown": round(float((eq_b / eq_b.cummax() - 1).min()) * 100, 1)}
+    return eq, st, eq_b
+
+
+def cmd_portfolio(a, slots=15):
+    tp = os.path.join(OUT, "trades.csv")
+    spy = load("SPY")
+    if not os.path.exists(tp) or spy is None:
+        print("portfolio: need trades.csv and SPY history (run fetch)")
+        return
+    trades = pd.read_csv(tp)
+    spw = weekly_of(spy)
+    eq, st, eq_b = simulate(trades, spw, slots)
+    base = spw["Close"].loc[eq.index]
+    spy_eq = base / base.iloc[0] * 100_000.0
+    yrs = st["years"]
+    st["spy_final_multiple"] = round(float(spy_eq.iloc[-1] / 100_000.0), 2)
+    st["spy_cagr"] = round(float((spy_eq.iloc[-1] / 100_000.0) ** (1 / yrs) - 1) * 100, 1)
+    st["spy_max_drawdown"] = round(float((spy_eq / spy_eq.cummax() - 1).min()) * 100, 1)
+    ann = {}
+    for y in sorted(set(eq.index.year)):
+        e_, s_ = eq[eq.index.year == y], spy_eq[spy_eq.index.year == y]
+        prev_e = eq[eq.index.year == y - 1]
+        prev_s = spy_eq[spy_eq.index.year == y - 1]
+        e0 = prev_e.iloc[-1] if len(prev_e) else e_.iloc[0]
+        s0 = prev_s.iloc[-1] if len(prev_s) else s_.iloc[0]
+        b_ = eq_b[eq_b.index.year == y]
+        pb = eq_b[eq_b.index.year == y - 1]
+        b0 = pb.iloc[-1] if len(pb) else b_.iloc[0]
+        ann[str(y)] = {"strategy": round(float(e_.iloc[-1] / e0 - 1) * 100, 1),
+                       "matched": round(float(b_.iloc[-1] / b0 - 1) * 100, 1),
+                       "spy": round(float(s_.iloc[-1] / s0 - 1) * 100, 1)}
+    st["by_year"] = ann
+    json.dump(st, open(os.path.join(OUT, "portfolio.json"), "w"), indent=1)
+    L = ["", f"## One account following the rules strictly vs SPY ({st['start']} to {st['end']})", "",
+         f"Start $100,000. Each position is 1/{slots} of the account at entry; signals taken in order, skipped when "
+         f"all {slots} slots are full; cash earns nothing; investor book exit; no commissions, taxes or slippage.",
+         "", "Two SPY comparisons (SPY is total return, dividends included):",
+         "- **Matched SPY:** every time the strategy buys $X of a stock, the same $X goes into SPY that week; "
+         "when the stock is sold, that SPY is sold the same week. Same dollars, same dates, same idle cash, so the "
+         "only difference is stock picking and exits.",
+         "- **Buy and hold SPY:** fully invested from the first day.", "",
+         "| | Strategy | Matched SPY | Buy and hold SPY |", "|---|---|---|---|",
+         f"| Ending value | ${100000 * st['final_multiple']:,.0f} ({st['final_multiple']}x) | "
+         f"${100000 * st['matched_spy_final_multiple']:,.0f} ({st['matched_spy_final_multiple']}x) | "
+         f"${100000 * st['spy_final_multiple']:,.0f} ({st['spy_final_multiple']}x) |",
+         f"| Per year (CAGR) | {st['cagr']}% | {st['matched_spy_cagr']}% | {st['spy_cagr']}% |",
+         f"| Worst drop (weekly closes) | {st['max_drawdown']}% | {st['matched_spy_max_drawdown']}% | {st['spy_max_drawdown']}% |",
+         f"| Average share of account invested | {st['avg_invested_pct']}% | {st['avg_invested_pct']}% | 100% |",
+         f"| Signals taken / skipped (slots full) | {st['signals_taken']:,} / {st['signals_skipped_full']:,} | | |",
+         "", "| Year | Strategy | Matched SPY | Buy and hold SPY |", "|---|---|---|---|"]
+    for y, r in ann.items():
+        L.append(f"| {y} | {r['strategy']}% | {r['matched']}% | {r['spy']}% |")
+    L += ["", "Survivorship bias flatters the strategy side (delisted stocks are missing), so treat any "
+          "edge over SPY as an upper bound."]
+    mdp = os.path.join(OUT, "backtest.md")
+    txt = open(mdp).read()
+    cut = txt.find("\n## One account following")
+    if cut >= 0:
+        txt = txt[:cut]
+    open(mdp, "w").write(txt.rstrip("\n") + "\n" + "\n".join(L) + "\n")
+    print(json.dumps({k: v for k, v in st.items() if k != "by_year"}, indent=1))
+
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -494,8 +649,9 @@ def main():
     r.add_argument("--time-budget", type=float, default=300)
     r.add_argument("--max-tickers", type=int, default=0)
     sub.add_parser("report")
+    sub.add_parser("portfolio")
     a = p.parse_args()
-    {"fetch": cmd_fetch, "run": cmd_run, "report": cmd_report}[a.cmd](a)
+    {"fetch": cmd_fetch, "run": cmd_run, "report": cmd_report, "portfolio": cmd_portfolio}[a.cmd](a)
 
 
 if __name__ == "__main__":
