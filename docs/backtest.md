@@ -69,3 +69,51 @@ Open positions (no sell signal yet): investor 48, trader 30; excluded from the b
 - Our own choices, not the book's: entry at the next open, one position per stock, 'sell half' treated as sell all, 'take partial' ignored.
 - No news, no contrary-opinion or price/dividend gauges, no commissions or slippage.
 - A high win rate is not a high return: this counts positive trades, not how much they made.
+
+## One account following the rules strictly vs SPY (2000-01-21 to 2026-10-02)
+
+Start $100,000. Each position is 1/15 of the account at entry; signals taken in order, skipped when all 15 slots are full; cash earns nothing; investor book exit; no commissions, taxes or slippage.
+
+Two SPY comparisons (SPY is total return, dividends included):
+- **Matched SPY:** every time the strategy buys $X of a stock, the same $X goes into SPY that week; when the stock is sold, that SPY is sold the same week. Same dollars, same dates, same idle cash, so the only difference is stock picking and exits.
+- **Buy and hold SPY:** fully invested from the first day.
+
+| | Strategy | Matched SPY | Buy and hold SPY |
+|---|---|---|---|
+| Ending value | $543,000 (5.43x) | $883,000 (8.83x) | $852,000 (8.52x) |
+| Per year (CAGR) | 6.5% | 8.5% | 8.4% |
+| Worst drop (weekly closes) | -26.0% | -57.4% | -54.6% |
+| Average share of account invested | 77.5% | 77.5% | 100% |
+| Signals taken / skipped (slots full) | 837 / 2,880 | | |
+
+| Year | Strategy | Matched SPY | Buy and hold SPY |
+|---|---|---|---|
+| 2000 | 38.7% | -5.4% | -8.2% |
+| 2001 | 3.5% | -5.7% | -10.4% |
+| 2002 | 10.3% | -37.8% | -23.5% |
+| 2003 | 38.8% | 57.1% | 27.6% |
+| 2004 | 15.2% | 22.6% | 12.3% |
+| 2005 | 10.4% | 5.5% | 4.8% |
+| 2006 | 7.5% | 28.0% | 15.8% |
+| 2007 | -3.1% | 8.8% | 5.9% |
+| 2008 | -7.0% | -9.8% | -39.4% |
+| 2009 | 0.6% | 23.7% | 32.0% |
+| 2010 | 16.6% | 20.7% | 14.0% |
+| 2011 | -9.7% | -4.0% | 1.9% |
+| 2012 | 10.8% | 14.1% | 14.1% |
+| 2013 | 29.4% | 41.3% | 33.9% |
+| 2014 | 16.8% | 16.5% | 15.6% |
+| 2015 | -9.6% | -4.0% | 0.7% |
+| 2016 | 22.0% | 6.6% | 11.0% |
+| 2017 | 19.1% | 24.2% | 21.7% |
+| 2018 | -5.6% | -2.7% | -5.4% |
+| 2019 | 16.0% | 26.4% | 32.8% |
+| 2020 | -7.9% | -9.2% | 16.4% |
+| 2021 | 6.5% | 30.2% | 30.4% |
+| 2022 | -11.9% | -19.9% | -18.2% |
+| 2023 | -4.9% | 19.4% | 26.2% |
+| 2024 | 3.1% | 21.0% | 26.8% |
+| 2025 | -1.5% | 3.3% | 17.4% |
+| 2026 | -5.9% | 4.8% | 12.4% |
+
+Survivorship bias flatters the strategy side (delisted stocks are missing), so treat any edge over SPY as an upper bound.
