@@ -49,6 +49,8 @@ jobs:
         run: python backtest.py fetch --universe all --time-budget 130
       - name: Replay the screener on past Fridays
         run: python backtest.py run --start "${{ github.event.inputs.start }}" --step "${{ github.event.inputs.step }}" --time-budget 170
+      - name: Test the list of book-based variants against SPY
+        run: python variants.py
       - name: Save backtest data
         if: always()
         uses: actions/cache/save@v4
@@ -66,14 +68,17 @@ jobs:
             data/backtest/trades.csv
             data/backtest/summary.json
             data/backtest/backtest.md
+            data/backtest/variants.md
+            data/backtest/variants.json
       - name: Publish the summary to the repo
         run: |
           mkdir -p docs
           cp data/backtest/backtest.md docs/backtest.md
           cp data/backtest/summary.json docs/backtest_summary.json
+          cp data/backtest/variants.md docs/variants.md
           git config user.name "weinstein-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add docs/backtest.md docs/backtest_summary.json
+          git add docs/backtest.md docs/backtest_summary.json docs/variants.md
           git commit -m "Backtest summary $(date -u +%F)" || echo "no changes"
           git pull --rebase
           git push
@@ -92,5 +97,6 @@ jobs:
             Backtest run: ${{ job.status }}
             Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Summary (after Pages updates): https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/backtest.md
+            Variants vs SPY: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/variants.md
             Full trade list: download "backtest-results" from the run page.
             If the fetch did not finish in time, just run the workflow again; it continues where it stopped.
