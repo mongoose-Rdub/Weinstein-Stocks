@@ -1,66 +1,68 @@
 {
  "stocks_processed": 5598,
- "trades": 3717,
+ "trades": 3561,
  "first_signal": "2000-01-14",
  "last_signal": "2026-09-25",
  "book_exit_investor": {
-  "n": 3669,
-  "win": 47.9,
-  "avg": 3.4,
-  "median": -0.3,
-  "still_open": 48,
-  "avg_weeks_held": 19.1,
+  "n": 3482,
+  "win": 48.8,
+  "avg": 4.1,
+  "median": -0.2,
+  "still_open": 79,
+  "avg_weeks_held": 29.6,
   "exits": {
-   "SELL HALF - STAGE 3": 2103,
-   "STOP HIT": 895,
-   "SELL ON FIRST RALLY": 589,
-   "SELL - FAILED BREAKOUT": 69,
-   "SELL - STAGE 4": 13
+   "HALF AT STAGE 3, THEN STOP HIT": 1293,
+   "STOP HIT": 859,
+   "HALF AT STAGE 3, THEN SELL - STAGE 4": 686,
+   "SELL ON FIRST RALLY": 563,
+   "SELL - FAILED BREAKOUT": 63,
+   "SELL - STAGE 4": 13,
+   "HALF AT STAGE 3, THEN SELL ON FIRST RALLY": 5
   }
  },
  "book_exit_trader": {
-  "n": 3687,
-  "win": 46.9,
-  "avg": 2.8,
+  "n": 3535,
+  "win": 46.8,
+  "avg": 2.6,
   "median": -0.5,
-  "still_open": 30,
-  "avg_weeks_held": 14.1,
+  "still_open": 26,
+  "avg_weeks_held": 13.9,
   "exits": {
-   "STOP HIT": 1540,
-   "SELL - STAGE 3 TOP": 1080,
-   "SELL ON FIRST RALLY": 609,
-   "SELL - BACK UNDER BREAKOUT": 455,
+   "STOP HIT": 1488,
+   "SELL - STAGE 3 TOP": 1036,
+   "SELL ON FIRST RALLY": 581,
+   "SELL - BACK UNDER BREAKOUT": 427,
    "SELL - STAGE 4": 3
   }
  },
  "hold_13w": {
-  "n": 3690,
-  "win": 60.5,
+  "n": 3538,
+  "win": 60.4,
   "avg": 3.0,
-  "median": 2.1,
+  "median": 2.0,
   "baseline_win": 54.8,
   "baseline_n": 4068081
  },
  "hold_26w": {
-  "n": 3640,
-  "win": 62.9,
+  "n": 3489,
+  "win": 62.7,
   "avg": 5.6,
-  "median": 4.3,
+  "median": 4.1,
   "baseline_win": 56.3,
   "baseline_n": 4001118
  },
  "hold_52w": {
-  "n": 3567,
-  "win": 65.2,
+  "n": 3417,
+  "win": 65.0,
   "avg": 9.9,
-  "median": 7.7,
+  "median": 7.6,
   "baseline_win": 58.2,
   "baseline_n": 3867625
  },
  "by_year": {
   "2000": {
    "trades": 23,
-   "book_exit_win": 56.5,
+   "book_exit_win": 60.9,
    "hold_26w_win": 69.6,
    "baseline_26w_win": 58.3
   },
@@ -71,39 +73,39 @@
    "baseline_26w_win": 61.6
   },
   "2002": {
-   "trades": 56,
-   "book_exit_win": 48.2,
-   "hold_26w_win": 55.4,
+   "trades": 53,
+   "book_exit_win": 47.2,
+   "hold_26w_win": 52.8,
    "baseline_26w_win": 47.2
   },
   "2003": {
-   "trades": 130,
-   "book_exit_win": 76.9,
-   "hold_26w_win": 86.9,
+   "trades": 118,
+   "book_exit_win": 78.0,
+   "hold_26w_win": 86.4,
    "baseline_26w_win": 83.4
   },
   "2004": {
-   "trades": 130,
-   "book_exit_win": 40.8,
-   "hold_26w_win": 56.9,
+   "trades": 122,
+   "book_exit_win": 48.4,
+   "hold_26w_win": 56.6,
    "baseline_26w_win": 62.7
   },
   "2005": {
-   "trades": 133,
-   "book_exit_win": 50.4,
-   "hold_26w_win": 69.2,
+   "trades": 123,
+   "book_exit_win": 56.9,
+   "hold_26w_win": 70.7,
    "baseline_26w_win": 67.5
   },
   "2006": {
-   "trades": 198,
-   "book_exit_win": 62.1,
-   "hold_26w_win": 68.7,
+   "trades": 190,
+   "book_exit_win": 61.6,
+   "hold_26w_win": 68.4,
    "baseline_26w_win": 66.9
   },
   "2007": {
-   "trades": 141,
-   "book_exit_win": 35.5,
-   "hold_26w_win": 41.8,
+   "trades": 139,
+   "book_exit_win": 33.8,
+   "hold_26w_win": 42.4,
    "baseline_26w_win": 38.1
   },
   "2009": {
@@ -113,155 +115,155 @@
    "baseline_26w_win": 77.5
   },
   "2010": {
-   "trades": 95,
-   "book_exit_win": 42.1,
-   "hold_26w_win": 63.2,
+   "trades": 93,
+   "book_exit_win": 41.9,
+   "hold_26w_win": 62.4,
    "baseline_26w_win": 68.8
   },
   "2011": {
    "trades": 76,
-   "book_exit_win": 28.9,
+   "book_exit_win": 32.9,
    "hold_26w_win": 35.5,
    "baseline_26w_win": 50.4
   },
   "2012": {
-   "trades": 170,
-   "book_exit_win": 57.1,
-   "hold_26w_win": 79.4,
+   "trades": 165,
+   "book_exit_win": 62.4,
+   "hold_26w_win": 78.8,
    "baseline_26w_win": 69.4
   },
   "2013": {
-   "trades": 281,
-   "book_exit_win": 59.8,
-   "hold_26w_win": 73.3,
+   "trades": 275,
+   "book_exit_win": 63.6,
+   "hold_26w_win": 73.5,
    "baseline_26w_win": 70.5
   },
   "2014": {
-   "trades": 263,
-   "book_exit_win": 47.1,
-   "hold_26w_win": 61.2,
+   "trades": 234,
+   "book_exit_win": 47.4,
+   "hold_26w_win": 59.4,
    "baseline_26w_win": 58.0
   },
   "2015": {
-   "trades": 170,
-   "book_exit_win": 39.4,
-   "hold_26w_win": 46.5,
+   "trades": 157,
+   "book_exit_win": 38.2,
+   "hold_26w_win": 47.1,
    "baseline_26w_win": 42.6
   },
   "2016": {
-   "trades": 246,
-   "book_exit_win": 62.2,
-   "hold_26w_win": 75.2,
+   "trades": 231,
+   "book_exit_win": 62.8,
+   "hold_26w_win": 74.0,
    "baseline_26w_win": 69.7
   },
   "2017": {
-   "trades": 321,
-   "book_exit_win": 56.1,
+   "trades": 308,
+   "book_exit_win": 60.4,
    "hold_26w_win": 69.2,
    "baseline_26w_win": 61.7
   },
   "2018": {
-   "trades": 118,
-   "book_exit_win": 29.7,
-   "hold_26w_win": 50.8,
+   "trades": 113,
+   "book_exit_win": 28.3,
+   "hold_26w_win": 49.6,
    "baseline_26w_win": 47.4
   },
   "2019": {
-   "trades": 227,
-   "book_exit_win": 44.1,
-   "hold_26w_win": 55.1,
+   "trades": 221,
+   "book_exit_win": 37.6,
+   "hold_26w_win": 54.8,
    "baseline_26w_win": 46.0
   },
   "2020": {
-   "trades": 63,
-   "book_exit_win": 28.6,
-   "hold_26w_win": 44.4,
+   "trades": 62,
+   "book_exit_win": 27.9,
+   "hold_26w_win": 45.2,
    "baseline_26w_win": 75.7
   },
   "2021": {
-   "trades": 203,
-   "book_exit_win": 34.5,
-   "hold_26w_win": 46.3,
+   "trades": 201,
+   "book_exit_win": 33.3,
+   "hold_26w_win": 46.8,
    "baseline_26w_win": 42.9
   },
   "2022": {
-   "trades": 40,
-   "book_exit_win": 17.5,
-   "hold_26w_win": 52.5,
+   "trades": 38,
+   "book_exit_win": 18.4,
+   "hold_26w_win": 52.6,
    "baseline_26w_win": 42.0
   },
   "2023": {
-   "trades": 112,
-   "book_exit_win": 47.3,
-   "hold_26w_win": 75.0,
+   "trades": 109,
+   "book_exit_win": 51.4,
+   "hold_26w_win": 76.1,
    "baseline_26w_win": 53.0
   },
   "2024": {
    "trades": 250,
-   "book_exit_win": 47.2,
+   "book_exit_win": 45.4,
    "hold_26w_win": 62.4,
    "baseline_26w_win": 50.3
   },
   "2025": {
-   "trades": 125,
-   "book_exit_win": 28.6,
-   "hold_26w_win": 59.2,
+   "trades": 119,
+   "book_exit_win": 24.5,
+   "hold_26w_win": 60.5,
    "baseline_26w_win": 55.7
   },
   "2026": {
-   "trades": 107,
-   "book_exit_win": 27.7,
+   "trades": 102,
+   "book_exit_win": 30.6,
    "hold_26w_win": 76.7,
    "baseline_26w_win": 52.7
   }
  },
  "by_verdict": {
   "BREAKOUT - BUY": {
-   "trades": 23,
+   "trades": 21,
    "book_exit": {
-    "n": 23,
-    "win": 43.5,
-    "avg": 4.3,
+    "n": 21,
+    "win": 47.6,
+    "avg": 5.2,
     "median": -1.5
    },
    "hold_26w": {
-    "n": 23,
-    "win": 73.9,
-    "avg": -2.2,
+    "n": 21,
+    "win": 76.2,
+    "avg": 1.0,
     "median": 1.5
    }
   },
   "CONTINUATION - BUY": {
-   "trades": 2733,
+   "trades": 2603,
    "book_exit": {
-    "n": 2698,
-    "win": 52.8,
-    "avg": 3.4,
-    "median": 0.3
+    "n": 2540,
+    "win": 53.9,
+    "avg": 4.0,
+    "median": 0.5
    },
    "hold_26w": {
-    "n": 2675,
-    "win": 64.7,
-    "avg": 5.2,
-    "median": 4.6
+    "n": 2550,
+    "win": 64.5,
+    "avg": 5.1,
+    "median": 4.5
    }
   },
   "PULLBACK - BUY": {
-   "trades": 961,
+   "trades": 937,
    "book_exit": {
-    "n": 948,
-    "win": 34.1,
-    "avg": 3.4,
-    "median": -4.6
+    "n": 921,
+    "win": 34.6,
+    "avg": 4.5,
+    "median": -4.7
    },
    "hold_26w": {
-    "n": 942,
-    "win": 57.5,
-    "avg": 7.0,
+    "n": 918,
+    "win": 57.3,
+    "avg": 7.1,
     "median": 3.2
    }
   }
  },
- "lowvol_flag_trades": 696,
+ "lowvol_flag_trades": 661,
  "sector_gate_unknown_trades": 0
 }
