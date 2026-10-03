@@ -1,0 +1,96 @@
+name: Backtest (manual only)
+
+# Run by hand from the Actions tab. It never touches the dashboard or Discord.
+# It is resumable: if the time budget runs out, run it again and it continues.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First Friday to replay (earlier = more history; sector ETFs begin Dec 1998)"
+        default: "2000-01-01"
+      step:
+        description: "1 = every Friday, 2 = every other Friday (faster)"
+        default: "1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      HAS_MAIL: ${{ secrets.MAIL_PASSWORD != '' && secrets.MAIL_USERNAME != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit tests
+        run: |
+          python test_pure.py
+          python test_backtest.py
+      - name: Restore backtest data (full price history and progress so far)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .bt_cache
+            data/backtest
+          key: backtest-${{ github.run_id }}
+          restore-keys: backtest-
+      - name: Download full price history (resumable)
+        run: python backtest.py fetch --universe all --time-budget 130
+      - name: Replay the screener on past Fridays
+        run: python backtest.py run --start "${{ github.event.inputs.start }}" --step "${{ github.event.inputs.step }}" --time-budget 170
+      - name: Save backtest data
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .bt_cache
+            data/backtest
+          key: backtest-${{ github.run_id }}
+      - name: Keep the full trade list as a download
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: |
+            data/backtest/trades.csv
+            data/backtest/summary.json
+            data/backtest/backtest.md
+      - name: Publish the summary to the repo
+        run: |
+          mkdir -p docs
+          cp data/backtest/backtest.md docs/backtest.md
+          cp data/backtest/summary.json docs/backtest_summary.json
+          git config user.name "weinstein-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/backtest.md docs/backtest_summary.json
+          git commit -m "Backtest summary $(date -u +%F)" || echo "no changes"
+          git pull --rebase
+          git push
+      - name: Email me the result
+        if: always() && env.HAS_MAIL == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.mail.me.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Weinstein Dashboard <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_USERNAME }}
+          subject: "Weinstein backtest: ${{ job.status }}"
+          body: |
+            Backtest run: ${{ job.status }}
+            Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Summary (after Pages updates): https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/backtest.md
+            Full trade list: download "backtest-results" from the run page.
+            If the fetch did not finish in time, just run the workflow again; it continues where it stopped.
